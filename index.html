@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>ScoreFlix — Cinema é comunidade</title>
+<meta name="description" content="Descubra filmes, avalie, organize sua watchlist e converse com a comunidade. Dados ao vivo da TMDB.">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#C8153C" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0E0E16" media="(prefers-color-scheme: dark)">
+
+<!-- Open Graph / redes sociais -->
+<meta property="og:type" content="website">
+<meta property="og:title" content="ScoreFlix — Cinema é comunidade">
+<meta property="og:description" content="Descubra, avalie e organize filmes com a comunidade.">
+<meta property="og:image" content="icon.svg">
+<meta property="og:locale" content="pt_BR">
+<meta name="twitter:card" content="summary">
+
+<!-- Aplica o tema salvo ANTES da primeira pintura (evita "flash" de tema errado).
+     Sem preferência salva, o CSS segue prefers-color-scheme automaticamente. -->
+<script>
+  try { var t = localStorage.getItem('sf_tema'); if (t) document.documentElement.setAttribute('data-theme', t); } catch (e) {}
+</script>
+
+<!-- Performance: conexões antecipadas para fontes, CDN de ícones e API de imagens/dados -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
+<link rel="preconnect" href="https://api.themoviedb.org" crossorigin>
+<link rel="preconnect" href="https://image.tmdb.org" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/tabler-icons/3.46.0/tabler-icons.min.css">
+
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon.svg">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<a href="#app" class="skip-link">Pular para o conteúdo</a>
+<div class="film-grain" aria-hidden="true"></div>
+<div id="reel-bar" class="reel-bar" aria-hidden="true"></div>
+<div id="toast" class="toast" role="status" aria-live="polite" aria-atomic="true"></div>
+<div id="modal-root"></div>
+<input type="file" id="import-file-input" accept="application/json" hidden onchange="importarDados(this)" aria-label="Importar arquivo de dados (JSON)">
+
+<!-- ============ NAVBAR ============ -->
+<header class="nav">
+  <div class="nav-inner">
+    <div class="brand" data-nav="home" role="link" tabindex="0" aria-label="ScoreFlix — ir para a página inicial">
+      <span class="brand-mark" aria-hidden="true">SF</span>
+      <span class="brand-name">ScoreFlix</span>
+    </div>
+
+    <!-- tabindex="0" + role="link": o handler de teclado do app.js ativa [data-nav][tabindex] com Enter/Espaço -->
+    <nav class="nav-links" aria-label="Navegação principal">
+      <a data-nav="generos" role="link" tabindex="0">Gêneros</a>
+      <a data-nav="indicacoes" role="link" tabindex="0">Indicações para você</a>
+      <a data-nav="populares" role="link" tabindex="0">Populares</a>
+      <a data-nav="comunidade" role="link" tabindex="0">Comunidade</a>
+      <a data-nav="comparar" role="link" tabindex="0">Comparar</a>
+      <a data-nav="filtrar" role="link" tabindex="0">Filtrar</a>
+      <a data-nav="roleta" role="link" tabindex="0">Descobrir</a>
+    </nav>
+
+    <div class="nav-search" role="search">
+      <i class="ti ti-search" aria-hidden="true"></i>
+      <input type="text" id="nav-search-input" placeholder="Buscar filmes na TMDB…  ( / )" autocomplete="off" aria-label="Buscar filmes" aria-controls="search-drop">
+      <div class="search-drop" id="search-drop" aria-live="polite"></div>
+    </div>
+
+    <div class="nav-actions">
+      <button class="icon-btn theme-btn" id="theme-toggle" type="button" aria-label="Alternar para modo escuro">
+        <svg class="theme-icon theme-icon-sun" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" focusable="false">
+          <circle cx="12" cy="12" r="4.4" fill="currentColor"/>
+          <g stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+            <path d="M12 2.5v2.4"/><path d="M12 19.1v2.4"/>
+            <path d="M4.2 4.2l1.7 1.7"/><path d="M18.1 18.1l1.7 1.7"/>
+            <path d="M2.5 12h2.4"/><path d="M19.1 12h2.4"/>
+            <path d="M4.2 19.8l1.7-1.7"/><path d="M18.1 5.9l1.7-1.7"/>
+          </g>
+        </svg>
+        <svg class="theme-icon theme-icon-moon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" focusable="false">
+          <path d="M20.2 14.6A8.6 8.6 0 1 1 9.4 3.8a7 7 0 0 0 10.8 10.8Z" fill="currentColor"/>
+          <circle cx="15.8" cy="8" r="0.9" fill="currentColor" opacity="0.55"/>
+          <circle cx="17.5" cy="12" r="0.55" fill="currentColor" opacity="0.4"/>
+        </svg>
+      </button>
+      <div class="avatar" data-nav="perfil" role="link" tabindex="0" aria-label="Ir para meu perfil">JP</div>
+      <button class="icon-btn burger-btn" id="burger-btn" type="button" aria-label="Abrir menu" aria-controls="mobile-drawer" aria-expanded="false">
+        <i class="ti ti-menu-2" aria-hidden="true"></i>
+      </button>
+    </div>
+  </div>
+</header>
+
+<!-- ============ MENU MOBILE ============ -->
+<div class="mobile-drawer-scrim" id="drawer-scrim" aria-hidden="true"></div>
+<aside class="mobile-drawer" id="mobile-drawer" aria-label="Menu de navegação">
+  <div class="mobile-drawer-head">
+    <div class="brand"><span class="brand-mark" aria-hidden="true">SF</span><span class="brand-name">ScoreFlix</span></div>
+    <button class="modal-close" id="drawer-close" type="button" aria-label="Fechar menu"><i class="ti ti-x" aria-hidden="true"></i></button>
+  </div>
+  <div class="mobile-drawer-search" role="search">
+    <i class="ti ti-search" aria-hidden="true"></i>
+    <input type="text" id="drawer-search-input" placeholder="Buscar filmes na TMDB…" autocomplete="off" aria-label="Buscar filmes">
+  </div>
+  <nav aria-label="Menu mobile">
+    <a data-nav="home" role="link" tabindex="0"><i class="ti ti-home" aria-hidden="true"></i> Início</a>
+    <a data-nav="generos" role="link" tabindex="0"><i class="ti ti-category" aria-hidden="true"></i> Gêneros</a>
+    <a data-nav="indicacoes" role="link" tabindex="0"><i class="ti ti-sparkles" aria-hidden="true"></i> Indicações para você</a>
+    <a data-nav="populares" role="link" tabindex="0"><i class="ti ti-flame" aria-hidden="true"></i> Populares</a>
+    <a data-nav="comunidade" role="link" tabindex="0"><i class="ti ti-users" aria-hidden="true"></i> Comunidade</a>
+    <a data-nav="comparar" role="link" tabindex="0"><i class="ti ti-scale" aria-hidden="true"></i> Comparar filmes</a>
+    <a data-nav="filtrar" role="link" tabindex="0"><i class="ti ti-filter" aria-hidden="true"></i> Filtrar filmes</a>
+    <a data-nav="roleta" role="link" tabindex="0"><i class="ti ti-dice" aria-hidden="true"></i> Descobrir algo novo</a>
+    <a data-nav="perfil" role="link" tabindex="0"><i class="ti ti-user" aria-hidden="true"></i> Meu perfil</a>
+  </nav>
+</aside>
+
+<!-- Conteúdo principal: o app.js renderiza cada página dentro deste <main> -->
+<main id="app" tabindex="-1" aria-live="polite" aria-busy="false"></main>
+
+<footer class="site-footer">
+  <div class="footer-inner">
+    <div class="footer-brand">
+      <span class="brand-mark" aria-hidden="true">SF</span>
+      <p>ScoreFlix — feito pela comunidade, para a comunidade.</p>
+    </div>
+    <nav class="footer-cols" aria-label="Rodapé">
+      <div>
+        <h4>Explorar</h4>
+        <a data-nav="populares" role="link" tabindex="0">Populares</a>
+        <a data-nav="generos" role="link" tabindex="0">Gêneros</a>
+        <a data-nav="indicacoes" role="link" tabindex="0">Indicações</a>
+      </div>
+      <div>
+        <h4>Comunidade</h4>
+        <a data-nav="perfil" role="link" tabindex="0">Meu perfil</a>
+      </div>
+    </nav>
+  </div>
+</footer>
+
+<script src="data.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
