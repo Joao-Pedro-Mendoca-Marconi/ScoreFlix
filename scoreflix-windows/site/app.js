@@ -1,10 +1,13 @@
 // ===================== ESTADO E UTILITÁRIOS =====================
+// Escapa texto dinâmico (usuário, TMDB, query de busca) antes de ir para innerHTML.
+const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const CONFIG = { heroMs: 5500, debounceMs: 350, toastMs: 2400 };
 let heroIndex = 0;
 let heroTimer = null;
 let activeProfileTab = 'watchlist';
 
-// ---------- Persistência local (watchlist, histórico, listas, avaliações) ----------
-// Tudo isso roda 100% no navegador do usuário (localStorage) — nenhum dado sai da máquina.
+// ---------- Estado do usuário (watchlist, histórico, listas, avaliações, perfil) ----------
+// Vem do servidor no boot (db.js). Nada fica salvo no navegador.
 const STORE_KEYS = {
   watchlist: 'sf_watchlist',
   assistidos: 'sf_assistidos',
@@ -13,17 +16,12 @@ const STORE_KEYS = {
   avaliacoes: 'sf_avaliacoes_usuario',
 };
 
-function loadStore(key, fallback) {
-  try {
-    const raw = localStorage.getItem(key);
-    return raw ? JSON.parse(raw) : fallback;
-  } catch { return fallback; }
-}
-function saveStore(key, value) {
-  try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* storage indisponível: segue só em memória */ }
-}
+// Leitura/escrita do estado do usuário: espelho em memória (db.js), sincronizado com o servidor.
+// Nada é gravado no navegador.
+function loadStore(key, fallback) { return DB.get(key, fallback); }
+function saveStore(key, value) { DB.set(key, value); }
 
-// Inicializa o estado do usuário a partir do localStorage, usando o seed de data.js
+// Inicializa o estado do usuário a partir do servidor, usando o seed de data.js
 // apenas na primeira visita (quando ainda não existe nada salvo).
 USUARIO_ATUAL.watchlist = loadStore(STORE_KEYS.watchlist, USUARIO_ATUAL.watchlist);
 USUARIO_ATUAL.historico = loadStore(STORE_KEYS.assistidos, USUARIO_ATUAL.historico);
@@ -36,13 +34,21 @@ if (perfilSalvo) Object.assign(USUARIO_ATUAL, perfilSalvo, { stats: { ...USUARIO
 let generosFavoritos = loadStore('sf_generos_favoritos', []); // usados para personalizar "Recomendados para você"
 const onboardingConcluido = loadStore('sf_onboarding_feito', false);
 
-function toast(msg, icon) {
+let __toastAcao = null;
+function toast(msg, icon, acao) {
   const t = document.getElementById('toast');
-  t.innerHTML = `${icon ? `<i class="ti ${icon}" style="margin-right:6px;"></i>` : ''}${msg}`;
+  __toastAcao = acao ? acao.fn : null;
+  t.innerHTML = `${icon ? `<i class="ti ${icon}" style="margin-right:6px;"></i>` : ''}${esc(msg)}${acao ? ` <button type="button" class="toast-action" data-toast-action>${esc(acao.label)}</button>` : ''}`;
   t.classList.add('show');
   clearTimeout(t._timer);
-  t._timer = setTimeout(() => t.classList.remove('show'), 2400);
+  t._timer = setTimeout(() => { t.classList.remove('show'); __toastAcao = null; }, acao ? 5000 : CONFIG.toastMs);
 }
+document.addEventListener('click', (e) => {
+  if (!e.target.closest('[data-toast-action]')) return;
+  const fn = __toastAcao; __toastAcao = null;
+  document.getElementById('toast').classList.remove('show');
+  if (fn) fn();
+});
 
 function starRow(nota) {
   let out = '';
@@ -59,19 +65,19 @@ function reviewItem(av) {
   return `
   <div class="review-item">
     <div class="review-head">
-      <div class="review-avatar" style="${av.propria ? 'background:var(--amber);color:#fff;' : ''}">${av.usuario.slice(0,2).toUpperCase()}</div>
+      <div class="review-avatar" style="${av.propria ? 'background:var(--amber);color:#fff;' : ''}">${esc(av.usuario.slice(0,2).toUpperCase())}</div>
       <div>
-        <div style="font-weight:600;font-size:13px;">${av.usuario}${av.propria ? ' <span style="color:var(--amber-text);font-weight:600;">(você)</span>' : ''}</div>
+        <div style="font-weight:600;font-size:13px;">${esc(av.usuario)}${av.propria ? ' <span style="color:var(--amber-text);font-weight:600;">(você)</span>' : ''}</div>
         <div class="review-stars">${starRow(av.nota)}</div>
       </div>
     </div>
     ${av.spoiler ? `
       <div class="spoiler-label"><i class="ti ti-alert-triangle"></i> Contém spoiler</div>
-      <div class="spoiler-blur" onclick="this.classList.toggle('revealed')">
-        <p class="review-text">${av.texto}</p>
-      </div>
-    ` : `<p class="review-text">${av.texto}</p>`}
-    ${tags.length ? `<div class="movie-tags" style="margin-top:8px;">${tags.map(t=>`<span class="tag">${t}</span>`).join('')}</div>` : ''}
+      <button type="button" class="spoiler-blur" aria-expanded="false" aria-label="Revelar spoiler" onclick="this.classList.toggle('revealed');this.setAttribute('aria-expanded',this.classList.contains('revealed'))">
+        <span class="review-text">${esc(av.texto)}</span>
+      </button>
+    ` : `<p class="review-text">${esc(av.texto)}</p>`}
+    ${tags.length ? `<div class="movie-tags" style="margin-top:8px;">${tags.map(t=>`<span class="tag">${esc(t)}</span>`).join('')}</div>` : ''}
   </div>`;
 }
 
@@ -101,7 +107,7 @@ function skeletonHome() {
 function errorBlock(msg) {
   return `
   <div class="notice-box" style="background:var(--wine-soft);border-color:var(--wine);color:var(--wine-text);">
-    <i class="ti ti-alert-triangle"></i><span>${msg}</span>
+    <i class="ti ti-alert-triangle"></i><span>${esc(msg)}</span>
   </div>
   <button class="btn btn-ghost" data-nav="home"><i class="ti ti-arrow-left"></i> Voltar ao catálogo</button>
   `;
@@ -111,15 +117,15 @@ function emptyState(icon, title, desc, ctaHtml) {
   return `
   <div class="empty-state">
     <i class="ti ${icon}"></i>
-    <h3>${title}</h3>
-    <p>${desc}</p>
+    <h3>${esc(title)}</h3>
+    <p>${esc(desc)}</p>
     ${ctaHtml || ''}
   </div>`;
 }
 
 // Pôster com fallback caso a imagem falhe ao carregar (rede lenta, URL quebrada, etc.)
 function posterStyle(url) {
-  return url ? `background-image:url('${url}');background-size:cover;background-position:center;` : 'background:var(--border);';
+  return url ? `background-image:url('${esc(url)}');background-size:cover;background-position:center;` : 'background:var(--border);';
 }
 
 // Renderiza uma fileira de logos de provedores de streaming (Onde assistir)
@@ -129,7 +135,7 @@ function providerRow(label, lista) {
   <div style="margin-bottom:12px;">
     <div style="font-size:12px;font-weight:600;color:var(--ink-mute);margin-bottom:6px;text-transform:uppercase;letter-spacing:0.03em;">${label}</div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;">
-      ${lista.map(p => `<img src="${p.logo}" alt="${p.nome}" title="${p.nome}" loading="lazy" style="width:42px;height:42px;border-radius:11px;object-fit:cover;">`).join('')}
+      ${lista.map(p => `<img src="${esc(p.logo)}" alt="${esc(p.nome)}" title="${esc(p.nome)}" loading="lazy" decoding="async" style="width:42px;height:42px;border-radius:11px;object-fit:cover;">`).join('')}
     </div>
   </div>`;
 }
@@ -139,30 +145,31 @@ function providerRow(label, lista) {
 function pessoaLinks(nomes) {
   if (!nomes || nomes === 'N/A') return 'N/A';
   return nomes.split(',').map(n => n.trim()).filter(Boolean)
-    .map(n => `<span class="pessoa-link" data-nav="pessoa" data-nome="${n.replace(/"/g,'&quot;')}">${n}</span>`)
+    .map(n => `<span class="pessoa-link" data-nav="pessoa" data-nome="${esc(n)}">${esc(n)}</span>`)
     .join(', ');
 }
 
 // ===================== TMDB API =====================
 // Documentação: https://developer.themoviedb.org/docs
 // Usa o Token de Leitura (Bearer) da TMDB.
-const TMDB_BASE = 'https://api.themoviedb.org/3';
+// Com proxy (recomendado): defina PROXY_URL em config.js e o token NUNCA vai para o navegador.
+// Sem proxy: cai no token abaixo. ponytail: token público no front só serve p/ protótipo; troque por proxy.
+const TMDB_BASE = (window.SF_CONFIG && window.SF_CONFIG.PROXY_URL) || 'https://api.themoviedb.org/3';
 const TMDB_IMG_BASE = 'https://image.tmdb.org/t/p';
 const TMDB_DEFAULT_TOKEN = 'eyJhbGciOiJIUzI1NiJ9.eyJhdWQiOiIxZWFjNzA3ZGJlNmRlYTk4NTliMjVlYWE3NzM3ZmI3OSIsIm5iZiI6MTc4NzYwODA4MS4xOTcsInN1YiI6IjZhOGNiYzExZGE2YmYxNTM5YWMwZjY3OSIsInNjb3BlcyI6WyJhcGlfcmVhZCJdLCJ2ZXJzaW9uIjoxfQ.VlZEXmVSn9JwNAtjEYwiT-GbtYG0vJxmKBVI9aNvHE0';
+const USA_PROXY = !!(window.SF_CONFIG && window.SF_CONFIG.PROXY_URL);
 
-// Token de leitura (somente API read) da TMDB
-
-async function tmdbFetch(path, params = {}) {
-  const token = TMDB_DEFAULT_TOKEN;
+async function tmdbFetch(path, params = {}, signal) {
   const qs = new URLSearchParams({ language: 'pt-BR', ...params }).toString();
+  const headers = { accept: 'application/json' };
+  if (!USA_PROXY) headers.Authorization = `Bearer ${TMDB_DEFAULT_TOKEN}`;
   try {
-    const res = await fetch(`${TMDB_BASE}${path}?${qs}`, {
-      headers: { Authorization: `Bearer ${token}`, accept: 'application/json' }
-    });
+    const res = await fetch(`${TMDB_BASE}${path}?${qs}`, { headers, signal });
     const data = await res.json();
-    if (data.success === false) return { error: data.status_message || 'Erro na TMDB' };
+    if (!res.ok || data.success === false) return { error: data.status_message || `Erro na TMDB (${res.status})` };
     return { data };
   } catch (err) {
+    if (err.name === 'AbortError') return { aborted: true };
     return { error: 'Não foi possível conectar à TMDB. Verifique sua internet.' };
   }
 }
@@ -351,35 +358,51 @@ async function tmdbSearch(query) {
   return { results: data.results };
 }
 
-// Cache em memória: evita rebuscar o mesmo filme várias vezes na mesma sessão
-const tmdbCache = new Map(); // chave: id usado para navegação (tt... ou tmdb-numérico)
+// Caches em memória: só guardam SUCESSO (um erro de rede não pode "envenenar" o filme até o reload).
+const tmdbCache = new Map();      // detalhe completo, chave: tt... ou id numérico
+const tmdbLiteCache = new Map();  // versão enxuta p/ cards
+const imdbMapa = {}; // cache só em memória // tt... -> id TMDB (evita repetir /find entre visitas)
 
-// getMovie aceita tanto um IMDb ID (tt...), vindo do catálogo curado em data.js e das
-// listas do usuário, quanto um ID numérico "cru" da TMDB, vindo de resultados de busca.
+async function resolverTmdbId(idStr) {
+  if (!idStr.startsWith('tt')) return idStr;
+  if (imdbMapa[idStr]) return imdbMapa[idStr];
+  const tmdbId = await imdbToTmdbId(idStr);
+  if (tmdbId) imdbMapa[idStr] = tmdbId;
+  return tmdbId;
+}
+
+// Detalhe COMPLETO (página do filme): vídeos, reviews, providers, etc. Aceita tt... ou id TMDB.
 async function getMovie(id) {
   if (!id) return null;
   const idStr = String(id);
   if (tmdbCache.has(idStr)) return tmdbCache.get(idStr);
-
-  const isImdb = idStr.startsWith('tt');
-  let tmdbId = idStr;
-  let origemImdbID = isImdb ? idStr : '';
-
-  if (isImdb) {
-    tmdbId = await imdbToTmdbId(idStr);
-    if (!tmdbId) { tmdbCache.set(idStr, null); return null; }
-  }
-
+  const tmdbId = await resolverTmdbId(idStr);
+  if (!tmdbId) return null;
   const { movie, error } = await tmdbDetail(tmdbId);
-  if (error) { tmdbCache.set(idStr, null); return null; }
-  const adapted = adaptTmdbMovie(movie, origemImdbID);
+  if (error) return null;
+  const adapted = adaptTmdbMovie(movie, idStr.startsWith('tt') ? idStr : '');
   tmdbCache.set(idStr, adapted);
   return adapted;
 }
 
+// Versão ENXUTA para cards/grades/listas: 1 request pequeno (detalhe + créditos). Reaproveita o
+// completo se já estiver em cache. ponytail: sem vídeos/reviews/providers; use getMovie() no detalhe.
+async function getMovieLite(id) {
+  if (!id) return null;
+  const idStr = String(id);
+  if (tmdbCache.has(idStr)) return tmdbCache.get(idStr);
+  if (tmdbLiteCache.has(idStr)) return tmdbLiteCache.get(idStr);
+  const tmdbId = await resolverTmdbId(idStr);
+  if (!tmdbId) return null;
+  const { data, error } = await tmdbFetch(`/movie/${tmdbId}`, { append_to_response: 'credits' });
+  if (error) return null;
+  const adapted = adaptTmdbMovie(data, idStr.startsWith('tt') ? idStr : '');
+  tmdbLiteCache.set(idStr, adapted);
+  return adapted;
+}
+
 async function getMovies(ids) {
-  const results = await Promise.all(ids.map(getMovie));
-  return results.filter(Boolean);
+  return (await Promise.all(ids.map(getMovieLite))).filter(Boolean);
 }
 
 
@@ -410,7 +433,7 @@ function movieCard(m) {
   const naWatchlist = USUARIO_ATUAL.watchlist.includes(m.imdbID);
   const assistido = USUARIO_ATUAL.historico.includes(m.imdbID);
   return `
-  <div class="movie-card" data-nav="filme" data-id="${m.imdbID}" tabindex="0" role="link" aria-label="Ver detalhes de ${m.Title}">
+  <div class="movie-card" data-nav="filme" data-id="${m.imdbID}" tabindex="0" role="link" aria-label="Ver detalhes de ${esc(m.Title)}">
     <div class="poster" style="${posterStyle(poster)}">
       <button class="quick-action ${naWatchlist ? 'saved' : ''}" aria-label="${naWatchlist ? 'Remover da minha lista' : 'Adicionar à minha lista'}"
         onclick="event.stopPropagation();toggleWatchlist('${m.imdbID}', event, true)">
@@ -419,13 +442,13 @@ function movieCard(m) {
       <div class="stamp-badge"><i class="ti ti-star-filled"></i>${nota}</div>
       <div class="poster-scrim"></div>
       <div class="poster-shine"></div>
-      <div class="poster-title">${m.Title}${assistido ? ' <i class="ti ti-circle-check-filled" style="font-size:13px;color:var(--success);vertical-align:middle;" title="Já assistido"></i>' : ''}</div>
+      <div class="poster-title">${esc(m.Title)}${assistido ? ' <i class="ti ti-circle-check-filled" style="font-size:13px;color:var(--success);vertical-align:middle;" title="Já assistido"></i>' : ''}</div>
     </div>
     <div class="movie-meta">
-      <span>${m.Year || ''}</span>${generos[0] ? `<span>·</span><span>${generos[0]}</span>` : ''}
+      <span>${esc(m.Year || '')}</span>${generos[0] ? `<span>·</span><span>${esc(generos[0])}</span>` : ''}
     </div>
     <div class="movie-tags">
-      ${generos.slice(0,2).map(g => `<span class="tag">${g}</span>`).join('')}
+      ${generos.slice(0,2).map(g => `<span class="tag">${esc(g)}</span>`).join('')}
     </div>
   </div>`;
 }
@@ -435,9 +458,9 @@ function perfilCard(p) {
   const seguindoEle = seguindo.includes(p.usuario);
   return `
   <div class="card" style="min-width:160px;text-align:center;flex-shrink:0;">
-    <div class="profile-avatar-lg" style="width:56px;height:56px;font-size:18px;margin:0 auto 10px;">${p.iniciais}</div>
-    <div style="font-weight:600;font-size:13px;">${p.nome}</div>
-    <div style="font-size:11px;color:var(--ink-mute);margin-bottom:10px;">@${p.usuario}</div>
+    <div class="profile-avatar-lg" style="width:56px;height:56px;font-size:18px;margin:0 auto 10px;">${esc(p.iniciais)}</div>
+    <div style="font-weight:600;font-size:13px;">${esc(p.nome)}</div>
+    <div style="font-size:11px;color:var(--ink-mute);margin-bottom:10px;">@${esc(p.usuario)}</div>
     <button class="btn ${seguindoEle ? 'btn-ghost' : 'btn-primary'}" style="width:100%;font-size:12px;padding:7px 10px;" onclick="toggleSeguir('${p.usuario}', this)">
       <i class="ti ${seguindoEle ? 'ti-user-check' : 'ti-user-plus'}"></i> ${seguindoEle ? 'Seguindo' : 'Seguir'}
     </button>
@@ -450,6 +473,7 @@ function toggleSeguir(usuario, btn) {
   if (agoraSeguindo) seguindo.push(usuario);
   else seguindo.splice(idx, 1);
   saveStore('sf_seguindo', seguindo);
+  DB.social.seguir(usuario, agoraSeguindo).then(ok => { if (!ok) toast('Não foi possível atualizar. Tente de novo.', 'ti-alert-triangle'); });
   toast(agoraSeguindo ? `Agora você segue @${usuario}` : `Você deixou de seguir @${usuario}`, agoraSeguindo ? 'ti-user-check' : 'ti-user-minus');
   if (btn) {
     btn.classList.toggle('btn-primary', !agoraSeguindo);
@@ -462,14 +486,14 @@ function feedItem(item) {
   const f = item.filme;
   return `
   <div class="card" style="display:flex;gap:14px;">
-    <div class="review-avatar" style="flex-shrink:0;">${item.usuario.slice(0,2).toUpperCase()}</div>
+    <div class="review-avatar" style="flex-shrink:0;">${esc(item.usuario.slice(0,2).toUpperCase())}</div>
     <div style="flex:1;min-width:0;">
       <div style="font-size:13px;">
-        <strong>${item.usuario}</strong> avaliou
-        <span data-nav="filme" data-id="${f.imdbID}" style="color:var(--amber-text);font-weight:600;cursor:pointer;">${f.Title}</span>
+        <strong>${esc(item.usuario)}</strong> avaliou
+        <span data-nav="filme" data-id="${f.imdbID}" style="color:var(--amber-text);font-weight:600;cursor:pointer;">${esc(f.Title)}</span>
         <span class="review-stars" style="margin-left:6px;">${starRow(item.nota)}</span>
       </div>
-      <p class="review-text" style="margin-top:4px;">${item.texto}</p>
+      <p class="review-text" style="margin-top:4px;">${esc(item.texto)}</p>
     </div>
     <div class="detail-poster" style="${posterStyle(f.Poster)};width:52px;height:78px;flex-shrink:0;border-radius:8px;cursor:pointer;" data-nav="filme" data-id="${f.imdbID}"></div>
   </div>`;
@@ -695,7 +719,6 @@ const pages = {
       emptyState('ti-movie-off', 'Nada por aqui', 'Experimente outro gênero ou outra categoria.',
         `<button class="btn btn-primary" data-nav="populares"><i class="ti ti-refresh"></i> Ver populares</button>`)}
 
-    <div id="populares-sentinel" style="height:1px;"></div>
     ${popularesState.pagina < popularesState.totalPaginas ? `
     <div style="text-align:center;margin-top:28px;" id="populares-load-more-wrap">
       <button class="btn btn-ghost" id="populares-load-more" onclick="carregarMaisPopulares()"><i class="ti ti-chevron-down"></i> Carregar mais</button>
@@ -719,9 +742,9 @@ const pages = {
     <h1 style="font-size:30px;margin-bottom:24px;">Gêneros</h1>
     <div class="movie-grid" style="grid-template-columns:repeat(auto-fill,minmax(200px,1fr));">
       ${GENEROS.map((g, i) => `
-        <div class="card" style="text-align:center;padding:28px 16px;cursor:pointer;" data-nav="populares" data-genero="${g}">
+        <div class="card" style="text-align:center;padding:28px 16px;cursor:pointer;" data-nav="populares" data-genero="${esc(g)}">
           <i class="ti ti-movie" style="font-size:26px;color:var(--amber);margin-bottom:10px;display:block;"></i>
-          <div style="font-weight:600;font-size:16px;">${g}</div>
+          <div style="font-weight:600;font-size:16px;">${esc(g)}</div>
           <div style="font-size:12px;color:var(--ink-mute);margin-top:4px;">${contagens[i].toLocaleString('pt-BR')} filmes na TMDB</div>
         </div>
       `).join('')}
@@ -755,7 +778,7 @@ const pages = {
     const assistindo = USUARIO_ATUAL.assistindo.includes(f.imdbID);
     const assistido = USUARIO_ATUAL.historico.includes(f.imdbID);
     const avaliacaoPropria = avaliacoesUsuario[f.imdbID] || null;
-    const avaliacoesComunidade = MOCK_AVALIACOES[f.imdbID] || [];
+    const avaliacoesComunidade = await DB.social.avaliacoes(await resolverTmdbId(f.imdbID));
     // Avaliação do usuário aparece primeiro na lista, se existir.
     const todasAvaliacoes = avaliacaoPropria
       ? [{ usuario: USUARIO_ATUAL.usuario, propria: true, ...avaliacaoPropria }, ...avaliacoesComunidade]
@@ -771,23 +794,24 @@ const pages = {
       : await getMovies(CATALOGO_IDS.filter(id => id !== f.imdbID).slice(0, 6));
 
     return `
+    <button class="btn btn-ghost" style="margin-bottom:16px;" onclick="voltarPagina()"><i class="ti ti-arrow-left"></i> Voltar</button>
     <div class="detail-hero">
       <div class="detail-poster" style="${posterStyle(poster)}"></div>
       <div>
-        <h1 class="detail-title">${f.Title}</h1>
+        <h1 class="detail-title">${esc(f.Title)}</h1>
         <div class="detail-meta-row">
-          <span>${f.Year}</span><span>·</span><span>${f.Runtime}</span><span>·</span><span>${f.Genre}</span><span>·</span><span>${f.Rated}</span>
-          ${f.Certification ? `<span>·</span><span class="tag wine">${f.Certification}</span>` : ''}
+          <span>${esc(f.Year)}</span><span>·</span><span>${esc(f.Runtime)}</span><span>·</span><span>${esc(f.Genre)}</span><span>·</span><span>${esc(f.Rated)}</span>
+          ${f.Certification ? `<span>·</span><span class="tag wine">${esc(f.Certification)}</span>` : ''}
         </div>
         <div class="detail-score">
           <div class="score-circle" style="--score-pct:${Math.max(0, Math.min(100, (parseFloat(f.imdbRating) || 0) * 10))}">${f.imdbRating}<span>/ 10</span></div>
           <div>
-            <div style="font-weight:600;font-size:14px;">${f.imdbVotes} avaliações</div>
+            <div style="font-weight:600;font-size:14px;">${esc(f.imdbVotes)} avaliações</div>
             <div style="font-size:12px;color:var(--ink-mute);">na TMDB</div>
           </div>
           ${avaliacaoPropria ? `<div class="tag success" style="margin-left:auto;"><i class="ti ti-star-filled"></i> Você deu ${avaliacaoPropria.nota}/5</div>` : ''}
         </div>
-        <p class="detail-synopsis">${f.Plot}</p>
+        <p class="detail-synopsis">${esc(f.Plot)}</p>
         <div class="crew-row">
           <div><span>Direção</span>${pessoaLinks(f.Director)}</div>
           <div><span>Roteiro</span>${pessoaLinks(f.Writer)}</div>
@@ -798,20 +822,20 @@ const pages = {
         ${f.CastFull && f.CastFull.length ? `
         <div class="row-scroll" style="margin:2px 0 16px;">
           ${f.CastFull.map(a => `
-            <div style="min-width:78px;text-align:center;flex-shrink:0;cursor:pointer;" data-nav="pessoa" data-nome="${a.nome.replace(/"/g, '&quot;')}">
+            <div style="min-width:78px;text-align:center;flex-shrink:0;cursor:pointer;" data-nav="pessoa" data-nome="${esc(a.nome)}">
               <div style="width:60px;height:60px;border-radius:50%;margin:0 auto 6px;${posterStyle(a.foto)}"></div>
-              <div style="font-size:11px;font-weight:600;line-height:1.3;">${a.nome}</div>
-              <div style="font-size:10px;color:var(--ink-mute);line-height:1.3;">${a.personagem}</div>
+              <div style="font-size:11px;font-weight:600;line-height:1.3;">${esc(a.nome)}</div>
+              <div style="font-size:10px;color:var(--ink-mute);line-height:1.3;">${esc(a.personagem)}</div>
             </div>`).join('')}
         </div>` : ''}
         <div class="movie-tags" style="margin-bottom:12px;">
-          ${generos.map(g => `<span class="tag" data-nav="populares" data-genero="${g}" style="cursor:pointer;">${g}</span>`).join('')}
+          ${generos.map(g => `<span class="tag" data-nav="populares" data-genero="${esc(g)}" style="cursor:pointer;">${esc(g)}</span>`).join('')}
           ${ratingsExternos}
-          ${f.Awards && f.Awards !== 'N/A' ? `<span class="tag wine">${f.Awards}</span>` : ''}
+          ${f.Awards && f.Awards !== 'N/A' ? `<span class="tag wine">${esc(f.Awards)}</span>` : ''}
         </div>
         ${f.Keywords && f.Keywords.length ? `
         <div class="movie-tags" style="margin-bottom:20px;">
-          ${f.Keywords.map(k => `<span class="tag olive" data-nav="keyword" data-kid="${k.id}" data-nome="${k.nome.replace(/"/g, '&quot;')}" style="cursor:pointer;">#${k.nome}</span>`).join('')}
+          ${f.Keywords.map(k => `<span class="tag olive" data-nav="keyword" data-kid="${k.id}" data-nome="${esc(k.nome)}" style="cursor:pointer;">#${esc(k.nome)}</span>`).join('')}
         </div>` : ''}
         <div style="display:flex;gap:10px;flex-wrap:wrap;">
           <button class="btn btn-primary" id="watchlist-btn-detail" onclick="toggleWatchlist('${f.imdbID}', event)">
@@ -823,8 +847,8 @@ const pages = {
           <button class="btn ${assistido ? 'btn-primary' : 'btn-ghost'}" id="assistido-btn-detail" onclick="toggleAssistido('${f.imdbID}', event)">
             <i class="ti ti-${assistido ? 'circle-check-filled' : 'circle-check'}"></i> ${assistido ? 'Assistido' : 'Marcar como assistido'}
           </button>
-          <button class="btn btn-ghost" onclick="abrirModalListas('${f.imdbID}', '${(f.Title || '').replace(/'/g,"\\'")}')"><i class="ti ti-list"></i> Adicionar a uma lista</button>
-          <button class="btn btn-ghost" onclick="compartilharFilme('${f.imdbID}', '${(f.Title || '').replace(/'/g,"\\'")}')"><i class="ti ti-share"></i> Compartilhar</button>
+          <button class="btn btn-ghost" data-abrir-listas="${f.imdbID}" data-titulo="${esc(f.Title)}"><i class="ti ti-list"></i> Adicionar a uma lista</button>
+          <button class="btn btn-ghost" data-compartilhar="${f.imdbID}" data-titulo="${esc(f.Title)}"><i class="ti ti-share"></i> Compartilhar</button>
           <button class="btn btn-ghost" onclick="comparadorIds=['${f.imdbID}'];navigate('comparar')"><i class="ti ti-scale"></i> Comparar</button>
         </div>
       </div>
@@ -833,16 +857,16 @@ const pages = {
     ${f.Collection ? `
     <div class="notice-box" style="cursor:pointer;" data-nav="colecao" data-cid="${f.Collection.id}">
       <i class="ti ti-stack-2"></i>
-      <span>Este filme faz parte da coleção <strong>${f.Collection.nome}</strong> — toque para ver a saga completa</span>
+      <span>Este filme faz parte da coleção <strong>${esc(f.Collection.nome)}</strong> — toque para ver a saga completa</span>
     </div>` : ''}
 
     <div class="eyebrow" style="margin-top:8px;">Ficha técnica</div>
     <div class="streaming-row" style="margin-bottom:8px;flex-wrap:wrap;">
-      <span class="platform-pill"><i class="ti ti-language"></i> ${f.Language}</span>
-      <span class="platform-pill"><i class="ti ti-world"></i> ${f.Country}</span>
-      <span class="platform-pill"><i class="ti ti-calendar"></i> Estreia: ${f.Released}</span>
-      ${f.BoxOffice && f.BoxOffice !== 'N/A' ? `<span class="platform-pill"><i class="ti ti-cash"></i> Bilheteria: ${f.BoxOffice}</span>` : ''}
-      ${f.Production && f.Production !== 'N/A' ? `<span class="platform-pill" style="cursor:pointer;" data-nav="estudio" data-coid="${f.ProductionId || ''}" data-nome="${f.Production.replace(/"/g, '&quot;')}"><i class="ti ti-building"></i> ${f.Production}</span>` : ''}
+      <span class="platform-pill"><i class="ti ti-language"></i> ${esc(f.Language)}</span>
+      <span class="platform-pill"><i class="ti ti-world"></i> ${esc(f.Country)}</span>
+      <span class="platform-pill"><i class="ti ti-calendar"></i> Estreia: ${esc(f.Released)}</span>
+      ${f.BoxOffice && f.BoxOffice !== 'N/A' ? `<span class="platform-pill"><i class="ti ti-cash"></i> Bilheteria: ${esc(f.BoxOffice)}</span>` : ''}
+      ${f.Production && f.Production !== 'N/A' ? `<span class="platform-pill" style="cursor:pointer;" data-nav="estudio" data-coid="${f.ProductionId || ''}" data-nome="${esc(f.Production)}"><i class="ti ti-building"></i> ${esc(f.Production)}</span>` : ''}
       ${f.Homepage ? `<a class="platform-pill" href="${f.Homepage}" target="_blank" style="text-decoration:none;"><i class="ti ti-link"></i> Site oficial</a>` : ''}
     </div>
 
@@ -879,13 +903,13 @@ const pages = {
         ${f.TmdbReviews.map(r => `
         <div class="card">
           <div class="review-head">
-            <div class="review-avatar">${r.autor.slice(0,2).toUpperCase()}</div>
+            <div class="review-avatar">${esc(r.autor.slice(0,2).toUpperCase())}</div>
             <div>
-              <div style="font-weight:600;font-size:13px;">${r.autor}</div>
+              <div style="font-weight:600;font-size:13px;">${esc(r.autor)}</div>
               ${r.nota ? `<div class="review-stars">${starRow(r.nota / 2)}</div>` : ''}
             </div>
           </div>
-          <p class="review-text">${r.texto}</p>
+          <p class="review-text">${esc(r.texto)}</p>
         </div>`).join('')}
       </div>
     </div>` : ''}
@@ -897,7 +921,7 @@ const pages = {
         <div class="star-picker" id="star-picker">
           ${[1,2,3,4,5].map(i => `<i class="ti ${avaliacaoPropria && i <= avaliacaoPropria.nota ? 'ti-star-filled active' : 'ti-star'}" data-star="${i}" onclick="setStar(${i})"></i>`).join('')}
         </div>
-        <textarea id="review-text" maxlength="500" placeholder="O que você achou? Compartilhe sua opinião com a comunidade...">${avaliacaoPropria ? avaliacaoPropria.texto : ''}</textarea>
+        <textarea id="review-text" maxlength="500" placeholder="O que você achou? Compartilhe sua opinião com a comunidade...">${avaliacaoPropria ? esc(avaliacaoPropria.texto) : ''}</textarea>
         <div class="spoiler-toggle">
           <input type="checkbox" id="spoiler-check" ${avaliacaoPropria?.spoiler ? 'checked' : ''}> <label for="spoiler-check">Este comentário contém spoiler</label>
         </div>
@@ -933,7 +957,7 @@ const pages = {
     // Ordena o feed do mais recente pro mais antigo simulando um "created_at" pela ordem
     // de declaração (não há timestamp real nos dados mockados).
     const feedComFilmes = await Promise.all(
-      [...FEED_ATIVIDADE].reverse().slice(0, 15).map(async (item) => ({ ...item, filme: await getMovie(item.imdbID) }))
+      (await DB.social.feed()).map(async (item) => ({ ...item, filme: await getMovie(item.filmeId) }))
     );
 
     return `
@@ -942,7 +966,7 @@ const pages = {
 
     <div class="section-head"><h2 style="font-size:16px;">Perfis para seguir</h2></div>
     <div class="row-scroll" style="margin-bottom:32px;">
-      ${USUARIOS_COMUNIDADE.map(perfilCard).join('')}
+      ${(await DB.social.usuarios()).map(perfilCard).join('')}
     </div>
 
     <div class="section-head"><h2 style="font-size:16px;">O que a comunidade está avaliando</h2></div>
@@ -958,15 +982,14 @@ const pages = {
 
     return `
     <div class="profile-header">
-      <div class="profile-avatar-lg avatar-cor-${u.cor || 'amber'}">${u.iniciais}</div>
+      <div class="profile-avatar-lg avatar-cor-${esc(u.cor || 'amber')}">${esc(u.iniciais)}</div>
       <div>
-        <h1 style="font-size:24px;">${u.nome}</h1>
-        <p style="color:var(--ink-mute);font-size:13px;">@${u.usuario} · membro desde ${u.membro_desde}${u.perfil_publico === false ? ' · <i class="ti ti-lock" title="Perfil privado"></i> privado' : ''}</p>
-        ${u.bio ? `<p style="color:var(--ink-soft);font-size:13px;margin-top:6px;max-width:420px;">${u.bio}</p>` : ''}
+        <h1 style="font-size:24px;">${esc(u.nome)}</h1>
+        <p style="color:var(--ink-mute);font-size:13px;">@${esc(u.usuario)} · membro desde ${esc(u.membro_desde)}${u.perfil_publico === false ? ' · <i class="ti ti-lock" title="Perfil privado"></i> privado' : ''}</p>
+        ${u.bio ? `<p style="color:var(--ink-soft);font-size:13px;margin-top:6px;max-width:420px;">${esc(u.bio)}</p>` : ''}
       </div>
       <div style="margin-left:auto;display:flex;gap:8px;flex-wrap:wrap;">
-        <button class="btn btn-ghost" onclick="exportarDados()"><i class="ti ti-download"></i> Exportar dados</button>
-        <button class="btn btn-ghost" onclick="abrirSeletorImportacao()"><i class="ti ti-upload"></i> Importar</button>
+        <button class="btn btn-ghost" onclick="sairDaConta()"><i class="ti ti-logout"></i> Sair da conta</button>
         <button class="btn btn-ghost" onclick="abrirModalEditarPerfil()"><i class="ti ti-settings"></i> Editar perfil</button>
       </div>
     </div>
@@ -974,7 +997,7 @@ const pages = {
     <div class="stats-grid">
       <div class="stat-card"><div class="stat-value" data-count="${u.historico.length}">0</div><div class="stat-label">Filmes assistidos</div></div>
       <div class="stat-card"><div class="stat-value" data-count="${avaliadosCount}">0</div><div class="stat-label">Avaliações feitas</div></div>
-      <div class="stat-card"><div class="stat-value">${u.stats.genero_favorito}</div><div class="stat-label">Gênero favorito</div></div>
+      <div class="stat-card"><div class="stat-value">${esc(u.stats.genero_favorito)}</div><div class="stat-label">Gênero favorito</div></div>
     </div>
 
     <div class="tabs-row" role="tablist">
@@ -998,7 +1021,7 @@ const pages = {
     return `
     <div class="eyebrow">Minhas listas</div>
     <div style="display:flex;align-items:center;gap:14px;margin-bottom:16px;flex-wrap:wrap;">
-      <h1 style="font-size:28px;">${lista.titulo}</h1>
+      <h1 style="font-size:28px;">${esc(lista.titulo)}</h1>
       <span class="tag ${lista.publica ? 'olive' : 'wine'}">${lista.publica ? 'Pública' : 'Privada'}</span>
       <button class="btn btn-ghost" style="margin-left:auto;" onclick="excluirLista('${lista.id}');navigate('perfil')"><i class="ti ti-trash"></i> Excluir lista</button>
     </div>
@@ -1037,7 +1060,7 @@ const pages = {
 
     const { data: busca, error: erroBusca } = await tmdbFetch('/search/person', { query: nome });
     if (erroBusca || !busca?.results?.length) {
-      return errorBlock(`Não encontramos "${nome}" na TMDB.`);
+      return errorBlock(`Não encontramos "${esc(nome)}" na TMDB.`);
     }
     const pessoa = await tmdbPessoaDetalhe(busca.results[0].id);
     if (!pessoa) return errorBlock('Não foi possível carregar os detalhes dessa pessoa na TMDB.');
@@ -1067,17 +1090,17 @@ const pages = {
     <div style="display:flex;align-items:flex-start;gap:22px;margin-bottom:24px;flex-wrap:wrap;">
       <div class="detail-poster" style="${posterStyle(foto)};width:120px;height:120px;border-radius:50%;flex-shrink:0;"></div>
       <div style="flex:1;min-width:240px;">
-        <div class="eyebrow">${departamentoLabel}</div>
-        <h1 style="font-size:28px;margin-bottom:6px;">${pessoa.name}</h1>
+        <div class="eyebrow">${esc(departamentoLabel)}</div>
+        <h1 style="font-size:28px;margin-bottom:6px;">${esc(pessoa.name)}</h1>
         <div class="movie-meta" style="margin-bottom:10px;">
           ${pessoa.birthday ? `<span><i class="ti ti-cake"></i> ${new Date(pessoa.birthday + 'T00:00').toLocaleDateString('pt-BR')}${idade != null ? ` (${idade} anos${pessoa.deathday ? ', em memória' : ''})` : ''}</span>` : ''}
-          ${pessoa.place_of_birth ? `<span>·</span><span><i class="ti ti-map-pin"></i> ${pessoa.place_of_birth}</span>` : ''}
+          ${pessoa.place_of_birth ? `<span>·</span><span><i class="ti ti-map-pin"></i> ${esc(pessoa.place_of_birth)}</span>` : ''}
         </div>
-        ${redes.length ? `<div style="display:flex;gap:8px;margin-bottom:10px;">${redes.map(r => `<a href="${r.url}" target="_blank" class="icon-btn" aria-label="Rede social"><i class="ti ${r.icon}"></i></a>`).join('')}</div>` : ''}
-        ${pessoa.also_known_as?.length ? `<p style="font-size:12px;color:var(--ink-mute);">Também conhecido(a) como: ${pessoa.also_known_as.slice(0, 4).join(', ')}</p>` : ''}
+        ${redes.length ? `<div style="display:flex;gap:8px;margin-bottom:10px;">${redes.map(r => `<a href="${esc(r.url)}" target="_blank" class="icon-btn" aria-label="Rede social"><i class="ti ${r.icon}"></i></a>`).join('')}</div>` : ''}
+        ${pessoa.also_known_as?.length ? `<p style="font-size:12px;color:var(--ink-mute);">Também conhecido(a) como: ${esc(pessoa.also_known_as.slice(0, 4).join(', '))}</p>` : ''}
       </div>
     </div>
-    ${pessoa.biography ? `<p class="detail-synopsis" style="margin-bottom:28px;max-width:720px;">${pessoa.biography.length > 600 ? pessoa.biography.slice(0, 600) + '…' : pessoa.biography}</p>` : ''}
+    ${pessoa.biography ? `<p class="detail-synopsis" style="margin-bottom:28px;max-width:720px;">${esc(pessoa.biography.length > 600 ? pessoa.biography.slice(0, 600) + '…' : pessoa.biography)}</p>` : ''}
     <div class="section-head"><h2>Filmografia</h2></div>
     ${filmes.length ? `<div class="movie-grid">${filmes.map(movieCard).join('')}</div>` :
       emptyState('ti-movie-off', 'Filmografia não encontrada', 'Não conseguimos localizar outros filmes dessa pessoa no catálogo da TMDB.')}
@@ -1091,10 +1114,10 @@ const pages = {
     const filmes = await getMovies((dados.parts || []).map(p => p.id));
     const backdrop = tmdbImg(dados.backdrop_path, 'original');
     return `
-    ${backdrop ? `<div style="height:220px;border-radius:20px;margin-bottom:20px;background-image:url('${backdrop}');background-size:cover;background-position:center;"></div>` : ''}
+    ${backdrop ? `<div style="height:220px;border-radius:20px;margin-bottom:20px;background-image:url('${esc(backdrop)}');background-size:cover;background-position:center;"></div>` : ''}
     <div class="eyebrow">Coleção TMDB</div>
-    <h1 style="font-size:28px;margin-bottom:10px;">${dados.name}</h1>
-    <p style="color:var(--ink-soft);font-size:14px;margin-bottom:24px;max-width:640px;">${dados.overview || ''}</p>
+    <h1 style="font-size:28px;margin-bottom:10px;">${esc(dados.name)}</h1>
+    <p style="color:var(--ink-soft);font-size:14px;margin-bottom:24px;max-width:640px;">${esc(dados.overview || '')}</p>
     ${filmes.length ? `<div class="movie-grid">${filmes.map(movieCard).join('')}</div>` :
       emptyState('ti-movie-off', 'Nenhum filme encontrado', 'Não conseguimos carregar os filmes dessa coleção.')}
     `;
@@ -1107,7 +1130,7 @@ const pages = {
     const filmes = await getMovies((data.results || []).slice(0, 20).map(r => r.id));
     return `
     <div class="eyebrow">Palavra-chave</div>
-    <h1 style="font-size:28px;margin-bottom:24px;">#${params.nome || ''}</h1>
+    <h1 style="font-size:28px;margin-bottom:24px;">#${esc(params.nome || '')}</h1>
     ${filmes.length ? `<div class="movie-grid">${filmes.map(movieCard).join('')}</div>` :
       emptyState('ti-movie-off', 'Nenhum filme encontrado', 'Tente outra palavra-chave.')}
     `;
@@ -1120,7 +1143,7 @@ const pages = {
     const filmes = await getMovies((data.results || []).slice(0, 20).map(r => r.id));
     return `
     <div class="eyebrow">Estúdio</div>
-    <h1 style="font-size:28px;margin-bottom:24px;">${params.nome || ''}</h1>
+    <h1 style="font-size:28px;margin-bottom:24px;">${esc(params.nome || '')}</h1>
     ${filmes.length ? `<div class="movie-grid">${filmes.map(movieCard).join('')}</div>` :
       emptyState('ti-movie-off', 'Nenhum filme encontrado', 'Não encontramos filmes desse estúdio no catálogo TMDB.')}
     `;
@@ -1192,7 +1215,6 @@ const pages = {
       emptyState('ti-movie-off', 'Nada por aqui', 'Tente afrouxar os filtros — outro gênero, nota mais baixa ou outra duração.',
         `<button class="btn btn-primary" data-nav="filtrar"><i class="ti ti-refresh"></i> Limpar filtros</button>`)}
 
-    <div id="filtrar-sentinel" style="height:1px;"></div>
     ${filtrarState.pagina < filtrarState.totalPaginas ? `
     <div style="text-align:center;margin-top:28px;">
       <button class="btn btn-ghost" id="filtrar-load-more" onclick="carregarMaisFiltrados()"><i class="ti ti-chevron-down"></i> Carregar mais</button>
@@ -1285,7 +1307,7 @@ async function buscarTMDB(query) {
 
   app.innerHTML = `
     <div class="eyebrow">Busca TMDB</div>
-    <h1 style="font-size:26px;margin-bottom:20px;">Resultados para "${query}"</h1>
+    <h1 style="font-size:26px;margin-bottom:20px;">Resultados para "${esc(query)}"</h1>
     ${skeletonGrid(8)}
   `;
   window.scrollTo({ top: 0, behavior: 'instant' });
@@ -1296,7 +1318,7 @@ async function buscarTMDB(query) {
     reelBar(false);
     app.innerHTML = `
       <div class="eyebrow">Busca TMDB</div>
-      <h1 style="font-size:26px;margin-bottom:12px;">Resultados para "${query}"</h1>
+      <h1 style="font-size:26px;margin-bottom:12px;">Resultados para "${esc(query)}"</h1>
       ${emptyState('ti-mood-sad', 'Nenhum resultado encontrado', error || 'Tente outro termo de busca.', `<button class="btn btn-primary" data-nav="home"><i class="ti ti-home"></i> Voltar ao início</button>`)}
     `;
     return;
@@ -1310,25 +1332,29 @@ async function buscarTMDB(query) {
 
   app.innerHTML = `
     <div class="eyebrow">Busca TMDB · ${data.total_results} resultado${data.total_results > 1 ? 's' : ''}</div>
-    <h1 style="font-size:26px;margin-bottom:20px;">Resultados para "${query}"</h1>
+    <h1 style="font-size:26px;margin-bottom:20px;">Resultados para "${esc(query)}"</h1>
     <div class="movie-grid" id="busca-grid">${detalhados.map(movieCard).join('')}</div>
-    <div id="busca-sentinel" style="height:1px;"></div>
-    ${buscaAtual.pagina < buscaAtual.totalPaginas ? `<div id="busca-loading-more" style="text-align:center;padding:24px 0;">${skeletonGrid(4)}</div>` : ''}
+    ${buscaAtual.pagina < buscaAtual.totalPaginas ? `
+    <div style="text-align:center;margin-top:28px;">
+      <button class="btn btn-ghost" id="busca-load-more" onclick="carregarMaisBusca()"><i class="ti ti-chevron-down"></i> Mostrar mais</button>
+    </div>` : ''}
   `;
   document.querySelectorAll('.nav-links a, .mobile-drawer nav a').forEach(a => a.classList.remove('active-link'));
-  attachInfiniteScroll('busca-sentinel', carregarMaisBusca);
 }
 
-// Carrega mais uma página de resultados da busca e anexa ao grid existente (infinite scroll).
+// Carrega mais uma página de resultados da busca e anexa ao grid existente, acionado
+// apenas pelo clique no botão "Mostrar mais" (sem scroll infinito).
 async function carregarMaisBusca() {
   if (buscaAtual.carregando || buscaAtual.pagina >= buscaAtual.totalPaginas) return;
   buscaAtual.carregando = true;
+  const btn = document.getElementById('busca-load-more');
+  if (btn) btn.innerHTML = '<i class="ti ti-loader-2" style="animation:spin .9s linear infinite;"></i> Carregando...';
+
   const proximaPagina = buscaAtual.pagina + 1;
   const { data, error } = await tmdbFetch('/search/movie', { query: buscaAtual.query, include_adult: 'false', page: proximaPagina });
-  const loadingEl = document.getElementById('busca-loading-more');
 
   if (error || !data?.results?.length) {
-    loadingEl?.remove();
+    btn?.remove();
     buscaAtual.carregando = false;
     return;
   }
@@ -1339,7 +1365,8 @@ async function carregarMaisBusca() {
 
   buscaAtual.pagina = proximaPagina;
   buscaAtual.carregando = false;
-  if (buscaAtual.pagina >= buscaAtual.totalPaginas) loadingEl?.remove();
+  if (buscaAtual.pagina >= buscaAtual.totalPaginas) btn?.remove();
+  else if (btn) btn.innerHTML = '<i class="ti ti-chevron-down"></i> Mostrar mais';
 }
 
 // ===================== NAVEGAÇÃO =====================
@@ -1364,18 +1391,41 @@ const SKELETON_BY_PAGE = {
   pessoa: () => skeletonGrid(8),
 };
 
-async function navigate(page, params = {}) {
+// Navegação com histórico real do navegador: cada chamada a navigate() empilha uma entrada
+// no history (exceto quando vem de um popstate, ou seja, do botão voltar do navegador/app).
+// Antes de sair da página atual, gravamos a posição de scroll dela na PRÓPRIA entrada do
+// history (replaceState), assim quando o usuário volta, restauramos exatamente onde estava
+// (ex.: no meio de uma grade de filmes), em vez de jogar pro topo.
+let __navSeq = 0; // ponytail: contador simples p/ ignorar resposta de navegação obsoleta (sem fila completa)
+
+// Serializa page+params numa URL compartilhável: #/filme/tt123, #/populares?tab=top
+function paramsParaHash(page, params) {
+  const resto = Object.entries(params || {}).filter(([k, v]) => v != null && v !== '' && k !== 'id');
+  const qs = resto.length ? '?' + new URLSearchParams(resto).toString() : '';
+  return `#/${page}${params?.id ? '/' + encodeURIComponent(params.id) : ''}${qs}`;
+}
+function hashParaRota() {
+  const hash = location.hash.replace(/^#\/?/, '');
+  if (!hash) return { page: 'home', params: {} };
+  const [caminho, queryStr] = hash.split('?');
+  const [page, id] = caminho.split('/');
+  const params = Object.fromEntries(new URLSearchParams(queryStr || ''));
+  if (id) params.id = decodeURIComponent(id);
+  return { page: page || 'home', params };
+}
+
+async function navigate(page, params = {}, opts = {}) {
+  const meuSeq = ++__navSeq;
   clearInterval(heroTimer);
   closeMobileDrawer();
   const app = document.getElementById('app');
   reelBar(true);
   app.classList.remove('page-enter');
   app.style.opacity = 0;
-  await new Promise(r => setTimeout(r, 120));
   const skel = SKELETON_BY_PAGE[page];
   app.innerHTML = skel ? skel() : loadingBlock();
   app.style.opacity = 1;
-  window.scrollTo({ top: 0, behavior: 'instant' });
+  if (!opts.fromPopState) window.scrollTo({ top: 0, behavior: 'instant' });
 
   const pageFn = pages[page] || pages['404'];
   let html;
@@ -1384,19 +1434,34 @@ async function navigate(page, params = {}) {
   } catch (err) {
     html = errorBlock('Algo deu errado ao carregar esta página. Tente novamente em instantes.');
   }
+  if (meuSeq !== __navSeq) return; // uma navegação mais nova já começou; descarta esta resposta
   app.innerHTML = html;
   reelBar(false);
   // força reflow para reiniciar a animação de entrada
   void app.offsetWidth;
   app.classList.add('page-enter');
-  window.scrollTo({ top: 0, behavior: 'instant' });
+
+  const hash = paramsParaHash(page, params);
+  if (!opts.fromPopState) {
+    // Salva a posição de scroll da página que está sendo deixada na entrada atual do history,
+    // depois empilha a nova página como uma entrada nova (isso é o que faz o botão voltar
+    // do navegador/celular funcionar corretamente entre as "páginas" do app).
+    if (window.history.state) {
+      window.history.replaceState({ ...window.history.state, scrollY: window.scrollY }, '', location.hash);
+    }
+    if (opts.replace) window.history.replaceState({ page, params, scrollY: 0 }, '', hash);
+    else window.history.pushState({ page, params, scrollY: 0 }, '', hash);
+    window.scrollTo({ top: 0, behavior: 'instant' });
+  } else {
+    window.scrollTo({ top: opts.scrollY || 0, behavior: 'instant' });
+  }
+
   if (page === 'home') startHeroRotation();
   if (page === 'comparar') {
     setupLiveSearch(document.getElementById('comparador-search'), document.getElementById('comparador-drop'), (tmdbId) => adicionarAoComparador(tmdbId));
   }
-  if (page === 'populares') attachInfiniteScroll('populares-sentinel', carregarMaisPopulares);
-  if (page === 'filtrar') attachInfiniteScroll('filtrar-sentinel', carregarMaisFiltrados);
   animateStatCounters();
+  document.getElementById('app')?.focus?.();
 
   // Atualiza o estado "ativo" dos links da navbar/drawer para refletir a página atual
   document.querySelectorAll('.nav-links a, .mobile-drawer nav a').forEach(a => {
@@ -1404,30 +1469,40 @@ async function navigate(page, params = {}) {
   });
 }
 
-// ===================== SCROLL INFINITO (genérico, reaproveitado em populares/filtrar) =====================
-// Guarda um observer por sentinela para poder desconectar o antigo ao trocar de página
-// (evita disparar carregamento de uma página que o usuário já deixou).
-const infiniteObservers = {};
-function attachInfiniteScroll(sentinelId, loadMoreFn) {
-  infiniteObservers[sentinelId]?.disconnect();
-  const sentinela = document.getElementById(sentinelId);
-  if (!sentinela) return;
-  const obs = new IntersectionObserver((entries) => {
-    if (entries[0].isIntersecting) loadMoreFn();
-  }, { rootMargin: '600px' });
-  obs.observe(sentinela);
-  infiniteObservers[sentinelId] = obs;
+// Botão "Voltar" nas telas de detalhe: usa o history real do navegador, então volta para
+// a página (e a posição de scroll) exatas de onde o usuário clicou no filme. Se por algum
+// motivo não houver histórico do app (ex.: o link foi aberto direto), cai pro catálogo.
+function voltarPagina() {
+  if (window.history.state) window.history.back();
+  else navigate('home');
 }
 
+// Botão voltar do navegador/celular: reidrata a página anterior exatamente como estava,
+// incluindo a posição de scroll (ex.: volta pro meio da lista de filmes de onde a pessoa saiu).
+window.addEventListener('popstate', (e) => {
+  const state = e.state || hashParaRota();
+  navigate(state.page, state.params || {}, { fromPopState: true, scrollY: state.scrollY || 0 });
+});window.addEventListener('popstate', (e) => {
+  const state = e.state;
+  if (!state) { navigate('home', {}, { fromPopState: true, scrollY: 0 }); return; }
+  navigate(state.page, state.params || {}, { fromPopState: true, scrollY: state.scrollY || 0 });
+});
+
 // ===================== SPOTLIGHT (mantido só no hero — removido dos pôsteres/carrossel a pedido) =====================
+// rAF-throttled: no máximo 1 atualização por frame, em vez de uma a cada pixel de movimento.
+let __spotlightPendente = null;
 document.addEventListener('pointermove', (e) => {
+  if (prefereMenosMovimento()) return;
   const target = e.target.closest('.hero');
   if (!target) return;
-  const rect = target.getBoundingClientRect();
-  const x = ((e.clientX - rect.left) / rect.width) * 100;
-  const y = ((e.clientY - rect.top) / rect.height) * 100;
-  target.style.setProperty('--spot-x', `${x}%`);
-  target.style.setProperty('--spot-y', `${y}%`);
+  const { clientX, clientY } = e;
+  if (__spotlightPendente) return;
+  __spotlightPendente = requestAnimationFrame(() => {
+    __spotlightPendente = null;
+    const rect = target.getBoundingClientRect();
+    target.style.setProperty('--spot-x', `${((clientX - rect.left) / rect.width) * 100}%`);
+    target.style.setProperty('--spot-y', `${((clientY - rect.top) / rect.height) * 100}%`);
+  });
 });
 
 // ===================== SOMBRA DE SCROLL NA NAVBAR =====================
@@ -1438,11 +1513,14 @@ window.addEventListener('scroll', () => {
 }, { passive: true });
 
 // ===================== CONTADORES ANIMADOS (estatísticas do perfil) =====================
+const prefereMenosMovimento = () => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+
 function animateStatCounters() {
   const nodes = document.querySelectorAll('.stat-value[data-count]');
   nodes.forEach(node => {
     const target = parseFloat(node.getAttribute('data-count')) || 0;
     const suffix = node.getAttribute('data-suffix') || '';
+    if (prefereMenosMovimento()) { node.textContent = target + suffix; return; }
     const duration = 900;
     const start = performance.now();
     function tick(now) {
@@ -1468,11 +1546,11 @@ function heroSlideMarkup(f, ativo) {
     <div class="hero-spotlight"></div>
     <div class="hero-content">
       <span class="hero-eyebrow"><i class="ti ti-flame"></i> ${ativo ? 'Destaque da semana' : 'Lançamento'}</span>
-      <h1 class="hero-title">${f.Title}</h1>
+      <h1 class="hero-title">${esc(f.Title)}</h1>
       <div class="hero-meta">
-        <span class="stamp"><i class="ti ti-star-filled" style="color:var(--amber)"></i> ${f.imdbRating} (${f.imdbVotes} avaliações)</span>
-        <span>${f.Runtime}</span>
-        <span>${(f.Genre || '').split(',')[0]}</span>
+        <span class="stamp"><i class="ti ti-star-filled" style="color:var(--amber)"></i> ${esc(f.imdbRating)} (${esc(f.imdbVotes)} avaliações)</span>
+        <span>${esc(f.Runtime)}</span>
+        <span>${esc((f.Genre || '').split(',')[0])}</span>
       </div>
       <div class="hero-actions">
         <button class="btn btn-primary" data-nav="filme" data-id="${f.imdbID}"><i class="ti ti-player-play-filled"></i> Ver detalhes</button>
@@ -1498,9 +1576,12 @@ function startHeroRotation() {
   const hero = document.getElementById('hero');
   if (!hero) return;
   const totalSlides = hero.querySelectorAll('.hero-slide').length;
-  if (totalSlides < 2) return; // sem necessidade de rotacionar com um único slide
+  if (totalSlides < 2 || prefereMenosMovimento()) return; // 1 slide, ou o usuário pediu menos movimento
   heroIndex = 0;
-  heroTimer = setInterval(() => trocarHeroSlide(heroIndex + 1), 5500);
+  heroTimer = setInterval(() => {
+    if (document.hidden) return; // aba em segundo plano: não gasta CPU/bateria trocando slide
+    trocarHeroSlide(heroIndex + 1);
+  }, CONFIG.heroMs);
 }
 
 function toggleWatchlist(imdbID, e, fromCard) {
@@ -1518,7 +1599,10 @@ function toggleWatchlist(imdbID, e, fromCard) {
     btn.classList.toggle('saved', adicionando);
     btn.setAttribute('aria-label', adicionando ? 'Remover da minha lista' : 'Adicionar à minha lista');
     const icon = btn.querySelector('i');
-    if (icon) icon.className = `ti ${adicionando ? 'ti-bookmark-filled' : 'ti-bookmark-plus'}`;
+    // Usa os MESMOS ícones do estado inicial do card (ti-check/ti-plus) — usar ícones
+    // diferentes aqui (ex.: ti-bookmark-filled) fazia o botão "sumir" visualmente após o
+    // clique, pois o ícone trocado não tinha o mesmo estilo/peso do conjunto do card.
+    if (icon) icon.className = `ti ${adicionando ? 'ti-check' : 'ti-plus'}`;
   } else {
     // Botão grande na página de detalhes: atualiza texto/ícone diretamente.
     const bigBtn = document.getElementById('watchlist-btn-detail');
@@ -1578,7 +1662,7 @@ function atualizarBotoesDetalhe(imdbID) {
   const assistido = USUARIO_ATUAL.historico.includes(imdbID);
 
   const wBtn = document.getElementById('watchlist-btn-detail');
-  if (wBtn) wBtn.innerHTML = `<i class="ti ${emWatchlist ? 'bookmark-filled' : 'bookmark-plus'}"></i> ${emWatchlist ? 'Na sua lista' : 'Quero assistir'}`;
+  if (wBtn) wBtn.innerHTML = `<i class="ti ${emWatchlist ? 'ti-bookmark-filled' : 'ti-bookmark-plus'}"></i> ${emWatchlist ? 'Na sua lista' : 'Quero assistir'}`;
 
   const aBtn = document.getElementById('assistindo-btn-detail');
   if (aBtn) {
@@ -1604,7 +1688,7 @@ function setStar(n) {
   });
 }
 
-// Publica (ou atualiza) a avaliação do usuário para um filme e persiste em localStorage.
+// Publica (ou atualiza) a avaliação do usuário para um filme e persiste em servidor.
 // A avaliação aparece imediatamente no topo da lista de "Avaliações da comunidade".
 function publicarAvaliacao(imdbID) {
   const jaTinha = avaliacoesUsuario[imdbID];
@@ -1616,6 +1700,7 @@ function publicarAvaliacao(imdbID) {
 
   avaliacoesUsuario[imdbID] = { nota: notaAtual, texto, spoiler, tags };
   saveStore(STORE_KEYS.avaliacoes, avaliacoesUsuario);
+  resolverTmdbId(imdbID).then(id => DB.social.publicarAvaliacao(id, avaliacoesUsuario[imdbID]));
   notaSelecionada = 0;
   toast(jaTinha ? 'Avaliação atualizada!' : 'Avaliação publicada!', 'ti-star-filled');
   navigate('filme', { id: imdbID });
@@ -1624,6 +1709,7 @@ function publicarAvaliacao(imdbID) {
 function removerAvaliacao(imdbID) {
   delete avaliacoesUsuario[imdbID];
   saveStore(STORE_KEYS.avaliacoes, avaliacoesUsuario);
+  resolverTmdbId(imdbID).then(id => DB.social.removerAvaliacao(id));
   toast('Avaliação removida');
   navigate('filme', { id: imdbID });
 }
@@ -1637,7 +1723,7 @@ function carregarTrailer(youtubeKey) {
 }
 
 function compartilharFilme(imdbID, titulo) {
-  const url = `${location.origin}${location.pathname}#filme-${imdbID}`;
+  const url = `${location.origin}${location.pathname}${paramsParaHash('filme', { id: imdbID })}`;
   if (navigator.share) {
     navigator.share({ title: titulo, text: `Dá uma olhada em "${titulo}" no ScoreFlix`, url }).catch(() => {});
   } else if (navigator.clipboard) {
@@ -1647,13 +1733,40 @@ function compartilharFilme(imdbID, titulo) {
   }
 }
 
-// ===================== MODAL: ADICIONAR A UMA LISTA =====================
+// ===================== MODAL: foco preso + devolução de foco ao fechar =====================
+// ponytail: um helper só, reaproveitado pelos 3 modais, em vez de repetir a lógica em cada um.
+let __elementoAntesDoModal = null;
+
+function abrirModalComFoco(scrimId) {
+  __elementoAntesDoModal = document.activeElement;
+  const scrim = document.getElementById(scrimId);
+  if (!scrim) return;
+  requestAnimationFrame(() => {
+    scrim.classList.add('open');
+    scrim.querySelector('[autofocus], input, textarea, button, select, [tabindex]')?.focus();
+  });
+  scrim.addEventListener('keydown', (e) => {
+    if (e.key === 'Tab') prenderFoco(e, scrim);
+  });
+}
+
+function prenderFoco(e, container) {
+  const focaveis = container.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])');
+  if (!focaveis.length) return;
+  const primeiro = focaveis[0];
+  const ultimo = focaveis[focaveis.length - 1];
+  if (e.shiftKey && document.activeElement === primeiro) { e.preventDefault(); ultimo.focus(); }
+  else if (!e.shiftKey && document.activeElement === ultimo) { e.preventDefault(); primeiro.focus(); }
+}
+
 function fecharModal() {
   const root = document.getElementById('modal-root');
   const scrim = root.querySelector('.modal-scrim');
   if (!scrim) return;
   scrim.classList.remove('open');
   setTimeout(() => { root.innerHTML = ''; }, 250);
+  __elementoAntesDoModal?.focus?.();
+  __elementoAntesDoModal = null;
 }
 
 function abrirModalListas(imdbID, titulo) {
@@ -1663,7 +1776,7 @@ function abrirModalListas(imdbID, titulo) {
     <div class="modal-scrim" id="list-modal-scrim">
       <div class="modal-box" role="dialog" aria-modal="true" aria-label="Adicionar a uma lista">
         <div class="modal-head">
-          <h3>Adicionar "${titulo}"</h3>
+          <h3>Adicionar "${esc(titulo)}"</h3>
           <button class="modal-close" onclick="fecharModal()" aria-label="Fechar"><i class="ti ti-x"></i></button>
         </div>
         <div id="modal-list-options" style="display:flex;flex-direction:column;gap:4px;margin-bottom:14px;">
@@ -1674,7 +1787,7 @@ function abrirModalListas(imdbID, titulo) {
               <div class="modal-list-option ${dentro ? 'in-list' : ''}" onclick="alternarFilmeNaLista('${l.id}','${imdbID}', this)">
                 <div class="check-circle"><i class="ti ti-check"></i></div>
                 <div>
-                  <div style="font-weight:600;font-size:13px;">${l.titulo}</div>
+                  <div style="font-weight:600;font-size:13px;">${esc(l.titulo)}</div>
                   <div style="font-size:11px;color:var(--ink-mute);">${l.filmes.length} filme${l.filmes.length!==1?'s':''}</div>
                 </div>
               </div>`;
@@ -1687,7 +1800,7 @@ function abrirModalListas(imdbID, titulo) {
       </div>
     </div>
   `;
-  requestAnimationFrame(() => document.getElementById('list-modal-scrim').classList.add('open'));
+  abrirModalComFoco('list-modal-scrim');
   document.getElementById('list-modal-scrim').addEventListener('click', (e) => {
     if (e.target.id === 'list-modal-scrim') fecharModal();
   });
@@ -1734,11 +1847,11 @@ function cardSorteado(filme, rotulo, onclick, eyebrow) {
       ${eyebrow ? `<div class="eyebrow" style="width:100%;"><i class="ti ti-sparkles"></i> ${eyebrow}</div>` : ''}
       <div class="detail-poster" style="${posterStyle(filme.Poster)};width:140px;height:210px;flex-shrink:0;cursor:pointer;" data-nav="filme" data-id="${filme.imdbID}"></div>
       <div style="flex:1;min-width:200px;">
-        <h3 style="font-size:20px;margin-bottom:6px;">${filme.Title}</h3>
+        <h3 style="font-size:20px;margin-bottom:6px;">${esc(filme.Title)}</h3>
         <div class="movie-meta" style="margin-bottom:10px;">
-          <span><i class="ti ti-star-filled" style="color:var(--amber);"></i> ${filme.imdbRating}</span><span>·</span><span>${filme.Year}</span><span>·</span><span>${filme.Runtime}</span>
+          <span><i class="ti ti-star-filled" style="color:var(--amber);"></i> ${esc(filme.imdbRating)}</span><span>·</span><span>${esc(filme.Year)}</span><span>·</span><span>${esc(filme.Runtime)}</span>
         </div>
-        <p style="font-size:13px;color:var(--ink-soft);line-height:1.6;margin-bottom:16px;">${plot.slice(0, 220)}${plot.length > 220 ? '...' : ''}</p>
+        <p style="font-size:13px;color:var(--ink-soft);line-height:1.6;margin-bottom:16px;">${esc(plot.slice(0, 220))}${plot.length > 220 ? '...' : ''}</p>
         <div style="display:flex;gap:10px;flex-wrap:wrap;">
           <button class="btn btn-primary" data-nav="filme" data-id="${filme.imdbID}"><i class="ti ti-info-circle"></i> Ver detalhes</button>
           <button class="btn btn-ghost" onclick="${onclick}"><i class="ti ti-refresh"></i> ${rotulo}</button>
@@ -1790,13 +1903,13 @@ let comparadorIds = []; // até 3 imdbIDs sendo comparados na sessão atual
 function comparadorTabela(filmes) {
   if (!filmes.length) return emptyState('ti-scale', 'Nenhum filme selecionado', 'Use a busca acima para adicionar filmes à comparação.');
   const linhas = [
-    { label: 'Nota', get: f => `<i class="ti ti-star-filled" style="color:var(--amber);"></i> ${f.imdbRating}` },
-    { label: 'Ano', get: f => f.Year },
-    { label: 'Duração', get: f => f.Runtime },
-    { label: 'Gênero', get: f => f.Genre },
-    { label: 'Direção', get: f => f.Director },
-    { label: 'Elenco', get: f => f.Actors },
-    { label: 'Classificação', get: f => f.Rated },
+    { label: 'Nota', get: f => `<i class="ti ti-star-filled" style="color:var(--amber);"></i> ${esc(f.imdbRating)}` },
+    { label: 'Ano', get: f => esc(f.Year) },
+    { label: 'Duração', get: f => esc(f.Runtime) },
+    { label: 'Gênero', get: f => esc(f.Genre) },
+    { label: 'Direção', get: f => esc(f.Director) },
+    { label: 'Elenco', get: f => esc(f.Actors) },
+    { label: 'Classificação', get: f => esc(f.Rated) },
   ];
   return `
   <div style="overflow-x:auto;">
@@ -1808,7 +1921,7 @@ function comparadorTabela(filmes) {
             <td style="padding:12px;vertical-align:top;">
               <div class="detail-poster" style="${posterStyle(f.Poster)};height:180px;margin-bottom:10px;cursor:pointer;" data-nav="filme" data-id="${f.imdbID}"></div>
               <div style="font-weight:600;font-size:14px;display:flex;align-items:center;justify-content:space-between;gap:8px;">
-                <span data-nav="filme" data-id="${f.imdbID}" style="cursor:pointer;">${f.Title}</span>
+                <span data-nav="filme" data-id="${f.imdbID}" style="cursor:pointer;">${esc(f.Title)}</span>
                 <button class="icon-btn" style="width:26px;height:26px;font-size:11px;flex-shrink:0;" onclick="removerDoComparador('${f.imdbID}')" aria-label="Remover"><i class="ti ti-x"></i></button>
               </div>
             </td>
@@ -1856,7 +1969,7 @@ async function renderProfileTab(tab) {
     const filmes = activeProfileGenreFilter ? todos.filter(m => (m.Genre||'').includes(activeProfileGenreFilter)) : todos;
     if (!todos.length) return emptyState('ti-bookmark', 'Sua watchlist está vazia', 'Adicione filmes que você quer assistir clicando no marcador em qualquer pôster.',
       `<button class="btn btn-primary" data-nav="populares"><i class="ti ti-compass"></i> Explorar filmes</button>`);
-    return `${generoFilterChips(todos, 'watchlist')}<div class="movie-grid">${filmes.map(movieCard).join('') || `<p style="color:var(--ink-mute);font-size:13px;">Nenhum filme de ${activeProfileGenreFilter} na sua watchlist.</p>`}</div>`;
+    return `${generoFilterChips(todos, 'watchlist')}<div class="movie-grid">${filmes.map(movieCard).join('') || `<p style="color:var(--ink-mute);font-size:13px;">Nenhum filme de ${esc(activeProfileGenreFilter)} na sua watchlist.</p>`}</div>`;
   }
 
   if (tab === 'historico') {
@@ -1864,7 +1977,7 @@ async function renderProfileTab(tab) {
     const filmes = activeProfileGenreFilter ? todos.filter(m => (m.Genre||'').includes(activeProfileGenreFilter)) : todos;
     if (!todos.length) return emptyState('ti-history', 'Nenhum filme assistido ainda', 'Marque filmes como "assistido" na página de detalhes para começar seu histórico.',
       `<button class="btn btn-primary" data-nav="populares"><i class="ti ti-compass"></i> Explorar filmes</button>`);
-    return `${generoFilterChips(todos, 'historico')}<div class="movie-grid">${filmes.map(movieCard).join('') || `<p style="color:var(--ink-mute);font-size:13px;">Nenhum filme de ${activeProfileGenreFilter} no seu histórico.</p>`}</div>`;
+    return `${generoFilterChips(todos, 'historico')}<div class="movie-grid">${filmes.map(movieCard).join('') || `<p style="color:var(--ink-mute);font-size:13px;">Nenhum filme de ${esc(activeProfileGenreFilter)} no seu histórico.</p>`}</div>`;
   }
 
   if (tab === 'stats') return renderStatsTab();
@@ -1878,7 +1991,7 @@ async function renderProfileTab(tab) {
             ${l.filmesObjs.slice(0,4).map(f => `<div style="${posterStyle(f.Poster && f.Poster!=='N/A' ? f.Poster : '')}"></div>`).join('') || `<div style="background:var(--border);"></div>`}
           </div>
           <div style="min-width:0;">
-            <div class="list-card-title">${l.titulo}</div>
+            <div class="list-card-title">${esc(l.titulo)}</div>
             <div class="list-card-meta">${l.filmes.length} filme${l.filmes.length!==1?'s':''} · ${l.publica ? 'Pública' : 'Privada'}</div>
           </div>
         </div>
@@ -1940,7 +2053,7 @@ async function renderStatsTab() {
   return `
   <div class="stats-grid" style="margin-bottom:24px;">
     <div class="stat-card"><div class="stat-value">${notaMedia}</div><div class="stat-label">Nota média dos seus filmes</div></div>
-    <div class="stat-card"><div class="stat-value">${entradas[0]?.[0] || '—'}</div><div class="stat-label">Gênero mais assistido</div></div>
+    <div class="stat-card"><div class="stat-value">${esc(entradas[0]?.[0] || '—')}</div><div class="stat-label">Gênero mais assistido</div></div>
     <div class="stat-card"><div class="stat-value">${decadaTop ? decadaTop[0]+'s' : '—'}</div><div class="stat-label">Década favorita</div></div>
   </div>
   <div class="card">
@@ -1948,7 +2061,7 @@ async function renderStatsTab() {
     <div style="display:flex;flex-direction:column;gap:12px;">
       ${entradas.map(([genero, count], i) => `
         <div style="display:flex;align-items:center;gap:12px;">
-          <div style="width:110px;font-size:13px;font-weight:600;flex-shrink:0;">${genero}</div>
+          <div style="width:110px;font-size:13px;font-weight:600;flex-shrink:0;">${esc(genero)}</div>
           <div style="flex:1;background:var(--border);border-radius:6px;overflow:hidden;height:18px;">
             <div style="width:${(count/max*100)}%;height:100%;background:${cores[i % cores.length]};border-radius:6px;transition:width 0.6s var(--ease-out);"></div>
           </div>
@@ -2000,7 +2113,7 @@ function abrirOnboarding() {
       </div>
     </div>
   `;
-  requestAnimationFrame(() => document.getElementById('onboarding-scrim').classList.add('open'));
+  abrirModalComFoco('onboarding-scrim');
 }
 
 function concluirOnboarding() {
@@ -2038,15 +2151,15 @@ function abrirModalEditarPerfil() {
         </div>
         <div class="field-group">
           <label class="field-label">Nome de exibição</label>
-          <input type="text" id="edit-nome" value="${u.nome}">
+          <input type="text" id="edit-nome" value="${esc(u.nome)}">
         </div>
         <div class="field-group">
           <label class="field-label">Usuário</label>
-          <input type="text" id="edit-usuario" value="${u.usuario}">
+          <input type="text" id="edit-usuario" value="${esc(u.usuario)}">
         </div>
         <div class="field-group">
           <label class="field-label">Bio</label>
-          <textarea id="edit-bio" placeholder="Conte um pouco sobre seu gosto de cinema...">${u.bio || ''}</textarea>
+          <textarea id="edit-bio" placeholder="Conte um pouco sobre seu gosto de cinema...">${esc(u.bio || '')}</textarea>
         </div>
         <div class="field-group">
           <label class="field-label">Cor do perfil</label>
@@ -2056,12 +2169,12 @@ function abrirModalEditarPerfil() {
         </div>
         <div class="field-group">
           <label class="field-label">Gênero favorito</label>
-          <select id="edit-genero">${GENEROS.map(g => `<option ${g===u.stats.genero_favorito?'selected':''}>${g}</option>`).join('')}</select>
+          <select id="edit-genero">${GENEROS.map(g => `<option ${g===u.stats.genero_favorito?'selected':''}>${esc(g)}</option>`).join('')}</select>
         </div>
         <div class="field-group">
           <label class="field-label">Gêneros favoritos (recomendações)</label>
           <div class="chip-row" id="edit-generos-favoritos">
-            ${GENEROS.map(g => `<span class="chip ${generosFavoritos.includes(g)?'active':''}" data-genero="${g}" onclick="this.classList.toggle('active')">${g}</span>`).join('')}
+            ${GENEROS.map(g => `<span class="chip ${generosFavoritos.includes(g)?'active':''}" data-genero="${esc(g)}" onclick="this.classList.toggle('active')">${esc(g)}</span>`).join('')}
           </div>
         </div>
         <div class="field-group" style="display:flex;align-items:center;justify-content:space-between;">
@@ -2075,7 +2188,7 @@ function abrirModalEditarPerfil() {
       </div>
     </div>
   `;
-  requestAnimationFrame(() => document.getElementById('edit-modal-scrim').classList.add('open'));
+  abrirModalComFoco('edit-modal-scrim');
   document.getElementById('edit-modal-scrim').addEventListener('click', (e) => {
     if (e.target.id === 'edit-modal-scrim') fecharModal();
   });
@@ -2084,68 +2197,6 @@ function abrirModalEditarPerfil() {
 function selecionarCorPerfil(cor) {
   USUARIO_ATUAL.cor = cor;
   document.querySelectorAll('#edit-cor-perfil .color-swatch').forEach(s => s.classList.toggle('active', s.getAttribute('data-cor') === cor));
-}
-
-// ===================== EXPORTAR / IMPORTAR DADOS =====================
-// Como tudo hoje vive em localStorage, isso funciona como um backup manual do usuário
-// e também como uma forma simples de levar os dados para outro navegador/dispositivo.
-function exportarDados() {
-  const pacote = {
-    versao: 1,
-    exportado_em: new Date().toISOString(),
-    watchlist: USUARIO_ATUAL.watchlist,
-    historico: USUARIO_ATUAL.historico,
-    assistindo: USUARIO_ATUAL.assistindo,
-    listas: USUARIO_ATUAL.listas,
-    avaliacoes: avaliacoesUsuario,
-    perfil: { nome: USUARIO_ATUAL.nome, usuario: USUARIO_ATUAL.usuario, genero_favorito: USUARIO_ATUAL.stats.genero_favorito },
-  };
-  const blob = new Blob([JSON.stringify(pacote, null, 2)], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `scoreflix-backup-${new Date().toISOString().slice(0,10)}.json`;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
-  toast('Backup baixado!', 'ti-download');
-}
-
-function abrirSeletorImportacao() {
-  document.getElementById('import-file-input')?.click();
-}
-
-function importarDados(fileInput) {
-  const file = fileInput.files?.[0];
-  if (!file) return;
-  const reader = new FileReader();
-  reader.onload = () => {
-    try {
-      const pacote = JSON.parse(reader.result);
-      if (!pacote || typeof pacote !== 'object') throw new Error('formato inválido');
-
-      USUARIO_ATUAL.watchlist = Array.isArray(pacote.watchlist) ? pacote.watchlist : USUARIO_ATUAL.watchlist;
-      USUARIO_ATUAL.historico = Array.isArray(pacote.historico) ? pacote.historico : USUARIO_ATUAL.historico;
-      USUARIO_ATUAL.assistindo = Array.isArray(pacote.assistindo) ? pacote.assistindo : USUARIO_ATUAL.assistindo;
-      USUARIO_ATUAL.listas = Array.isArray(pacote.listas) ? pacote.listas : USUARIO_ATUAL.listas;
-      avaliacoesUsuario = (pacote.avaliacoes && typeof pacote.avaliacoes === 'object') ? pacote.avaliacoes : avaliacoesUsuario;
-      if (pacote.perfil) Object.assign(USUARIO_ATUAL, { nome: pacote.perfil.nome || USUARIO_ATUAL.nome, usuario: pacote.perfil.usuario || USUARIO_ATUAL.usuario });
-
-      saveStore(STORE_KEYS.watchlist, USUARIO_ATUAL.watchlist);
-      saveStore(STORE_KEYS.assistidos, USUARIO_ATUAL.historico);
-      saveStore(STORE_KEYS.assistindo, USUARIO_ATUAL.assistindo);
-      saveStore(STORE_KEYS.listas, USUARIO_ATUAL.listas);
-      saveStore(STORE_KEYS.avaliacoes, avaliacoesUsuario);
-
-      toast('Dados importados com sucesso!', 'ti-check');
-      navigate('perfil');
-    } catch (err) {
-      toast('Arquivo inválido. Verifique se é um backup do ScoreFlix.', 'ti-alert-triangle');
-    }
-  };
-  reader.readAsText(file);
-  fileInput.value = ''; // permite reimportar o mesmo arquivo depois, se precisar
 }
 
 function salvarPerfil() {
@@ -2186,6 +2237,11 @@ function criarListaEAdicionar(imdbID) {
 
 // Delegação de clique global para data-nav (também repassa data-id e data-genero)
 document.addEventListener('click', (e) => {
+  const abrirListas = e.target.closest('[data-abrir-listas]');
+  if (abrirListas) { abrirModalListas(abrirListas.getAttribute('data-abrir-listas'), abrirListas.getAttribute('data-titulo')); return; }
+  const compartilhar = e.target.closest('[data-compartilhar]');
+  if (compartilhar) { compartilharFilme(compartilhar.getAttribute('data-compartilhar'), compartilhar.getAttribute('data-titulo')); return; }
+
   const el = e.target.closest('[data-nav]');
   if (!el) return;
   const page = el.getAttribute('data-nav');
@@ -2274,7 +2330,7 @@ function setupLiveSearch(inputEl, dropEl, onSelect) {
     const { results, error } = await tmdbSearch(q);
     if (lastQuery !== q) return; // resposta obsoleta (usuário já digitou algo novo)
     if (error || !results.length) {
-      dropEl.innerHTML = `<div class="search-drop-empty">Nenhum filme encontrado para "${q}"</div>`;
+      dropEl.innerHTML = `<div class="search-drop-empty">Nenhum filme encontrado para "${esc(q)}"</div>`;
       dropEl.classList.add('open');
       return;
     }
@@ -2284,19 +2340,24 @@ function setupLiveSearch(inputEl, dropEl, onSelect) {
         <div class="search-drop-item" ${onSelect ? `data-tmdb-id="${r.id}"` : `data-nav="filme" data-id="${r.id}"`}>
           <div class="search-drop-poster" style="${posterStyle(r.poster_path ? tmdbImg(r.poster_path, 'w92') : '')}"></div>
           <div class="search-drop-info">
-            <div class="search-drop-title">${r.title || r.original_title}</div>
+            <div class="search-drop-title">${esc(r.title || r.original_title)}</div>
             <div class="search-drop-meta">${(r.release_date || '').slice(0,4) || 'Data desconhecida'}</div>
           </div>
         </div>
       `).join('')}
       ${onSelect ? '' : `
-      <div class="search-drop-footer" onclick="document.getElementById('search-drop').classList.remove('open');buscarTMDB('${q.replace(/'/g,"\\'")}')">
-        Ver todos os resultados para "${q}"
+      <div class="search-drop-footer" data-ver-todos="${esc(q)}">
+        Ver todos os resultados para "${esc(q)}"
       </div>`}
     `;
     if (onSelect) {
       dropEl.querySelectorAll('.search-drop-item').forEach(el => {
         el.addEventListener('click', () => onSelect(el.getAttribute('data-tmdb-id')));
+      });
+    } else {
+      dropEl.querySelector('[data-ver-todos]')?.addEventListener('click', (e) => {
+        dropEl.classList.remove('open');
+        buscarTMDB(e.currentTarget.getAttribute('data-ver-todos'));
       });
     }
     dropEl.classList.add('open');
@@ -2349,9 +2410,9 @@ document.addEventListener('keydown', (e) => {
   document.getElementById('nav-search-input')?.focus();
 });
 
-// ===================== TEMA (persistido em localStorage) =====================
+// ===================== TEMA (salvo no estado do usuário no servidor) =====================
 const themeBtn = document.getElementById('theme-toggle');
-const temaSalvo = localStorage.getItem('sf_tema');
+const temaSalvo = DB.get('sf_tema', null);
 if (temaSalvo) {
   document.documentElement.setAttribute('data-theme', temaSalvo);
   themeBtn.setAttribute('aria-label', temaSalvo === 'dark' ? 'Alternar para modo claro' : 'Alternar para modo escuro');
@@ -2364,7 +2425,7 @@ themeBtn.addEventListener('click', () => {
   const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
   const novoTema = isDark ? 'light' : 'dark';
   document.documentElement.setAttribute('data-theme', novoTema);
-  localStorage.setItem('sf_tema', novoTema);
+  DB.set('sf_tema', novoTema);
   themeBtn.setAttribute('aria-label', novoTema === 'dark' ? 'Alternar para modo claro' : 'Alternar para modo escuro');
 });
 
@@ -2374,17 +2435,41 @@ window.addEventListener('online', () => toast('Conexão restabelecida!', 'ti-wif
 
 // ===================== PWA: registro do Service Worker =====================
 // Habilita instalação do app e navegação básica offline (filmes já visitados
-// ficam disponíveis via cache mesmo sem internet).
+// ficam disponíveis via cache mesmo sem internet). O novo SW instala em segundo
+// plano e fica "esperando" — só assume depois que o usuário confirma o toast,
+// pra não trocar os arquivos embaixo dele no meio do uso.
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('sw.js').catch(() => {
+    navigator.serviceWorker.register('sw.js').then((registration) => {
+      function avisarAtualizacao(worker) {
+        toast('Nova versão disponível', 'ti-sparkles', {
+          label: 'Atualizar',
+          fn: () => { worker.postMessage('SKIP_WAITING'); },
+        });
+      }
+      if (registration.waiting && navigator.serviceWorker.controller) avisarAtualizacao(registration.waiting);
+      registration.addEventListener('updatefound', () => {
+        const novo = registration.installing;
+        novo?.addEventListener('statechange', () => {
+          if (novo.state === 'installed' && navigator.serviceWorker.controller) avisarAtualizacao(novo);
+        });
+      });
+    }).catch(() => {
       // Falha silenciosa: o app continua funcionando normalmente sem o service worker
+    });
+    // Quando o SW novo assume (após o clique em "Atualizar"), recarrega para usar os arquivos novos.
+    let jaRecarregou = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (jaRecarregou) return;
+      jaRecarregou = true;
+      window.location.reload();
     });
   });
 }
 
-// Boot
+// Boot — respeita a URL atual (deep link / F5 / link compartilhado), senão cai na home.
 document.getElementById('app').style.transition = 'opacity 0.15s ease';
-navigate('home').then(() => {
+const __rotaInicial = hashParaRota();
+navigate(__rotaInicial.page, __rotaInicial.params, { replace: true }).then(() => {
   if (!onboardingConcluido) abrirOnboarding();
 });

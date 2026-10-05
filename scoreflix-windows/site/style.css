@@ -927,7 +927,11 @@ input:disabled, textarea:disabled, select:disabled { opacity: 0.55; background: 
   opacity: 0; pointer-events: none; transform: translateX(-50%) translateY(20px) scale(0.94);
   transition: opacity 0.3s var(--ease-out), transform 0.3s var(--ease-spring);
 }
-.toast.show { opacity: 1; transform: translateX(-50%) translateY(0) scale(1); }
+.toast.show { opacity: 1; transform: translateX(-50%) translateY(0) scale(1); pointer-events: auto; }
+.toast-action {
+  margin-left: var(--space-3); background: transparent; border: none; cursor: pointer;
+  color: inherit; font: inherit; font-weight: 700; text-decoration: underline; padding: 0;
+}
 
 /* ==========================================================================
    18. RESPONSIVIDADE (mobile-first nos ajustes: do maior para o menor)

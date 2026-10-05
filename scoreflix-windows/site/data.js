@@ -100,7 +100,7 @@ const FEED_ATIVIDADE = Object.entries(MOCK_AVALIACOES).flatMap(([imdbID, avaliac
 
 // Usuário logado (mock) — watchlist/histórico referenciam IMDb IDs reais.
 // Estes são apenas os valores DEFAULT/seed; em runtime, app.js sobrescreve
-// watchlist/historico/listas com o que estiver salvo no localStorage do usuário.
+// watchlist/historico/listas com o que estiver salvo no estado do usuário no servidor.
 const USUARIO_ATUAL = {
   nome: "João Pedro",
   usuario: "joaopedro",
@@ -110,10 +110,7 @@ const USUARIO_ATUAL = {
   perfil_publico: true,
   membro_desde: "Março 2024",
   stats: { genero_favorito: "Suspense" },
-  watchlist: ["tt0102926", "tt0816692", "tt0361748"],
-  historico: ["tt1375666", "tt0110912", "tt0468569", "tt4154796"],
-  listas: [
-    { id: "l1", titulo: "Suspenses que me deixaram paranoico", filmes: ["tt0102926", "tt0114369"], publica: true },
-    { id: "l2", titulo: "Obras-primas do Nolan", filmes: ["tt1375666", "tt0468569", "tt0209144"], publica: true },
-  ]
+  watchlist: [],
+  historico: [],
+  listas: []
 };

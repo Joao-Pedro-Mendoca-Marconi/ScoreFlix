@@ -19,9 +19,6 @@
 
 <!-- Aplica o tema salvo ANTES da primeira pintura (evita "flash" de tema errado).
      Sem preferência salva, o CSS segue prefers-color-scheme automaticamente. -->
-<script>
-  try { var t = localStorage.getItem('sf_tema'); if (t) document.documentElement.setAttribute('data-theme', t); } catch (e) {}
-</script>
 
 <!-- Performance: conexões antecipadas para fontes, CDN de ícones e API de imagens/dados -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -34,8 +31,10 @@
 
 <link rel="manifest" href="manifest.json">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
-<link rel="apple-touch-icon" href="icon.svg">
+<link rel="icon" href="icon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="icon-192.png">
 <link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="auth.css">
 </head>
 <body>
 
@@ -44,7 +43,7 @@
 <div id="reel-bar" class="reel-bar" aria-hidden="true"></div>
 <div id="toast" class="toast" role="status" aria-live="polite" aria-atomic="true"></div>
 <div id="modal-root"></div>
-<input type="file" id="import-file-input" accept="application/json" hidden onchange="importarDados(this)" aria-label="Importar arquivo de dados (JSON)">
+<div id="auth-root" hidden></div>
 
 <!-- ============ NAVBAR ============ -->
 <header class="nav">
@@ -88,7 +87,7 @@
           <circle cx="17.5" cy="12" r="0.55" fill="currentColor" opacity="0.4"/>
         </svg>
       </button>
-      <div class="avatar" data-nav="perfil" role="link" tabindex="0" aria-label="Ir para meu perfil">JP</div>
+      <div class="avatar" data-nav="perfil" role="link" tabindex="0" aria-label="Ir para meu perfil"></div>
       <button class="icon-btn burger-btn" id="burger-btn" type="button" aria-label="Abrir menu" aria-controls="mobile-drawer" aria-expanded="false">
         <i class="ti ti-menu-2" aria-hidden="true"></i>
       </button>
@@ -121,7 +120,7 @@
 </aside>
 
 <!-- Conteúdo principal: o app.js renderiza cada página dentro deste <main> -->
-<main id="app" tabindex="-1" aria-live="polite" aria-busy="false"></main>
+<main id="app" tabindex="-1"></main>
 
 <footer class="site-footer">
   <div class="footer-inner">
@@ -145,6 +144,7 @@
 </footer>
 
 <script src="data.js"></script>
-<script src="app.js"></script>
+<script src="db.js"></script>
+<script src="login.js"></script>
 </body>
 </html>
