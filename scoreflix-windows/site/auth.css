@@ -1,0 +1,23 @@
+/* Tela de login/cadastro. Usa as variáveis do style.css quando existem, com fallback próprio. */
+#auth-root { position: fixed; inset: 0; z-index: 9000; display: flex; align-items: center; justify-content: center; padding: 20px; background: rgba(8,8,14,.72); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); }
+#auth-root[hidden] { display: none; }
+body.auth-aberto { overflow: hidden; }
+.auth-card { width: 100%; max-width: 380px; background: var(--surface, #FFFFFF); color: var(--ink, #14141C); border: 1px solid var(--border, #E4E3EA); border-radius: 18px; padding: 28px 24px; box-shadow: 0 24px 60px rgba(0,0,0,.35); font-family: 'Plus Jakarta Sans', system-ui, sans-serif; }
+.auth-brand { justify-content: center; margin-bottom: 18px; }
+.auth-card h1 { font-size: 20px; margin: 0 0 6px; text-align: center; }
+.auth-sub { font-size: 13px; color: var(--ink-mute, #6B6A78); text-align: center; margin: 0 0 18px; line-height: 1.5; }
+.auth-tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; background: var(--border, #EFEEF3); padding: 4px; border-radius: 12px; margin-bottom: 18px; }
+.auth-tabs button { border: 0; background: transparent; color: var(--ink-mute, #6B6A78); font: inherit; font-size: 13px; font-weight: 600; padding: 9px; border-radius: 9px; cursor: pointer; }
+.auth-tabs button.active { background: var(--surface, #FFFFFF); color: var(--ink, #14141C); box-shadow: 0 1px 3px rgba(0,0,0,.12); }
+#auth-form { display: flex; flex-direction: column; gap: 12px; }
+#auth-form label { display: flex; flex-direction: column; gap: 5px; font-size: 12px; font-weight: 600; color: var(--ink-soft, #3A3947); }
+#auth-form input { font: inherit; font-size: 14px; font-weight: 400; padding: 11px 12px; border-radius: 10px; border: 1px solid var(--border, #DCDBE3); background: var(--bg, #F8F8FA); color: var(--ink, #14141C); }
+#auth-form input:focus { outline: 2px solid var(--wine, #C8153C); outline-offset: 1px; }
+.auth-dica { font-size: 11px; color: var(--ink-mute, #6B6A78); margin: -6px 0 0; }
+.auth-erro { font-size: 13px; color: var(--wine-text, #C8153C); background: var(--wine-soft, #FBE9EE); padding: 9px 12px; border-radius: 10px; margin: 0; }
+.auth-erro[hidden] { display: none; }
+.auth-submit { font: inherit; font-size: 14px; font-weight: 700; color: #fff; background: var(--wine, #C8153C); border: 0; border-radius: 12px; padding: 12px; cursor: pointer; margin-top: 4px; }
+.auth-submit:disabled { opacity: .7; cursor: wait; }
+:root[data-theme="dark"] .auth-card, :root:not([data-theme="light"]) .auth-card { }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .auth-card { --surface: #1A1A24; --bg: #12121A; --border: #2C2C3A; --ink: #F4F3F6; --ink-soft: #C9C7D3; --ink-mute: #9A98A8; } }
+:root[data-theme="dark"] .auth-card { --surface: #1A1A24; --bg: #12121A; --border: #2C2C3A; --ink: #F4F3F6; --ink-soft: #C9C7D3; --ink-mute: #9A98A8; }
